@@ -42,7 +42,7 @@ SIGBREAK, SIGHUP, SIGQUIT) гасят все виджеты, кроме банн
 раскладку не глушат (--once оставляет её на экране для сверки).
 
 Слайды --monitor-items (формат «источник.метрика», сетка конфига GearLink):
-  источники cpu / gpu / ram, метрики usage / temp / freq / volt — например
+  источники cpu / gpu / ram, метрики usage / temp / freq / fan / volt — например
   cpu.usage, cpu.temp, cpu.freq, cpu.volt, ram.usage, gpu.temp. Источник ram
   рисуется заголовком «DRAM0» (селектор 0x30), gpu — «GPU0» (0x10). Короткие
   имена первой редакции (cpu, gpu, ram, usage, temp, freq, volt) принимаются
@@ -70,6 +70,7 @@ import ctypes                  # MacVolume: CoreAudio (WindowsVolume импор�
 import datetime as dt
 import json
 from collections.abc import Callable
+from contextlib import suppress
 import logging
 import queue
 import shutil
@@ -127,11 +128,11 @@ STAT_EVERY_S = 30.0
 # GearLink конфигурирует только cpu/gpu/ram × usage/temp/volt/freq —
 # VRM/CHA в прошивке есть, но в его сетке отсутствуют, не выставляем.
 SLIDE_SOURCES = {"cpu": 0x0, "gpu": 0x1, "ram": 0x3}      # «ram» = заголовок DRAM
-SLIDE_METRICS = {"usage": 0x0, "temp": 0x1, "freq": 0x2, "volt": 0x5}
+SLIDE_METRICS = {"usage": 0x0, "temp": 0x1, "freq": 0x2, "fan": 0x3, "volt": 0x5}
 SLIDE_ALIASES = {   # короткие имена первой редакции v0.3 → канонические
     "cpu": "cpu.usage", "gpu": "gpu.usage", "ram": "ram.usage",
     "usage": "cpu.usage", "temp": "cpu.temp", "freq": "cpu.freq",
-    "volt": "cpu.volt",
+    "fan": "cpu.fan", "volt": "cpu.volt",
 }
 DEFAULT_SLIDES = ("cpu.usage", "ram.usage", "cpu.freq")   # набор v0.2: CPU0 Usage /
                                                           # DRAM0 Usage (RAM) / CPU0 Freq
@@ -395,13 +396,20 @@ class HostSensors:
             return None
         v: object = m
         for k in path:
-            v = v.get(k) if isinstance(v, dict) else None
+            if isinstance(v, dict):
+                v = v.get(k)
+            elif isinstance(v, list) and isinstance(k, int) and k < len(v):
+                v = v[k]            # macmon: fans[0].rpm
+            else:
+                v = None
             if v is None:
                 return None
         try:
-            return int(round(float(v) * scale))
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                return int(round(v * scale))
         except (TypeError, ValueError):
-            return None
+            pass
+        return None
 
     # --- канонические поставщики значений слайдов ---
     def cpu_temp(self) -> int | None:
@@ -429,6 +437,8 @@ class HostSensors:
         v = self._macmon_val(["pcpu_freq_mhz"])
         if v:
             return v
+        if self._p is None:                    # psutil нет (macmon тоже не помог)
+            return 0
         try:
             f = self._p.cpu_freq()
             return int(round(f.current)) if f and f.current else 0
@@ -461,6 +471,24 @@ class HostSensors:
             return f
         return self._lhm_pick("gpu.freq", "Clock", ("gpu core", "gpu"),
                               "частота GPU")
+
+    def fan_rpm(self) -> int | None:
+        """Об/мин основного вентилятора (§10.3.1: тайл Fan, гейдж 1000/3500):
+        macOS — macmon (fans[0].rpm); Linux — psutil.sensors_fans; Windows —
+        LHM Type='Fan' («CPU», иначе любой). 0 RPM (тихий ход) — валидное
+        значение; fanless/нет датчика → None, слайд скипнется."""
+        r = self._macmon_val(["fans", 0, "rpm"])
+        if r is not None:
+            return r
+        if sys.platform == "darwin":
+            return None             # macmon есть, вентиляторов нет (Air)
+        if self._p is not None and hasattr(self._p, "sensors_fans"):
+            with suppress(Exception):      # нет датчиков/платформы — скип, не повод логировать
+                for fans in self._p.sensors_fans().values():
+                    if fans:
+                        return int(fans[0].current)
+        return self._lhm_pick("cpu.fan", "Fan", ("cpu", "fan"),
+                              "об/мин вентилятора CPU", fallback_any=True)
 
     def gpu_volt(self) -> int | None:
         """мВ GPU: LHM Voltage («GPU Core»), В → мВ."""
@@ -738,7 +766,7 @@ def parse_monitor_items(spec: str | None) -> list[str]:
 
 def slide_value(spec: str, args, sensors: HostSensors) -> int | None:
     """Значение слайда «источник.метрика» в единицах тайла 0x66
-    (Usage=%, Temp=°C, Freq=МГц, Volt=мВ — PROTOCOL_OLED.md §10.5);
+    (Usage=%, Temp=°C, Freq=МГц, Fan=об/мин, Volt=мВ — PROTOCOL_OLED.md §10.5);
     None = слайд пропускается (сенсор недоступен — предупреждение одно,
     см. HostSensors._lhm_pick). Ручные --cpu/--temp/--ram-val приоритетны.
     cpu.usage/ram.usage без psutil — останов; всё остальное сенсорное —
@@ -765,6 +793,8 @@ def slide_value(spec: str, args, sensors: HostSensors) -> int | None:
             return args.temp if args.temp is not None else sensors.cpu_temp()
         if met == "volt":
             return sensors.cpu_volt()
+        if met == "fan":
+            return sensors.fan_rpm()
         return sensors.cpu_freq_mhz()                  # cpu.freq
     if src == "gpu":
         return {"temp": sensors.gpu_temp, "freq": sensors.gpu_freq,
@@ -1571,7 +1601,7 @@ def main() -> None:
     g.add_argument("--monitor-items", default=None, metavar="ИСТ.МЕТРИКА[,…]",
                    help="слайды через запятую, формат «источник.метрика» — "
                         "сетка конфига GearLink: источники cpu/gpu/ram, "
-                        "метрики usage/temp/freq/volt, например cpu.usage,"
+                        "метрики usage/temp/freq/volt/fan, например cpu.usage,"
                         "cpu.freq,ram.usage,gpu.temp; ram рисуется заголовком "
                         "«DRAM0» (0x30), gpu — «GPU0» (0x10); сенсорные слайды "
                         "(все temp/freq/volt и gpu.usage) требуют запущенный "
