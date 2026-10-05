@@ -1064,7 +1064,11 @@ class MacVolume:
         def poll():
             while not self._stop.is_set():
                 try:
-                    self.percent()
+                    # fresh(), не percent(): кэш громкости живёт 0.5 с, а
+                    # _muted_live обновляет только fresh — с percent() переход
+                    # mute ловился раз в 0.5+ с (главный лаг unmute-пуша;
+                    # полный цикл чтения ~0.07 мс — кэш тут не нужен).
+                    self.fresh()
                     m = self.muted()
                     if m is not None:
                         if self._muted and not m and self.on_unmute:
@@ -1122,13 +1126,15 @@ class VolumeWorker(threading.Thread):
     def stop(self) -> None:
         self._stop_evt = True
 
-    def push_level(self) -> None:
-        """Пуш текущего уровня на OSD (реакция на Unmute — запрос пользователя
-        2026-10-05: «уровень громкости в ответ на Unmute»)."""
-        v = self._vol.fresh()
-        if v is not None and self._kbd.push_volume_osd(v):
-            self._last = v
-            log("Unmute → OSD громкости: %d%%" % v)
+    def kick(self) -> None:
+        """Открыть окно с ГАРАНТИРОВАННЫМ пушом (реакция на Unmute — запрос
+        2026-10-05: «уровень громкости в ответ на Unmute»). _last=None →
+        первый такт каденции пушит всегда; NAK (тракт занят сразу после
+        нажатия качельки) ретраится на следующем такте — прежний одиночный
+        пуш из потока поллера без ретрая терялся («не всегда пушится»).
+        Вызывается из потока поллера, воркер делает остальное."""
+        self._until = time.monotonic() + self.WINDOW_S
+        self._last = None
 
     def run(self) -> None:
         next_push = 0.0
@@ -1192,11 +1198,12 @@ def run(kbd: M901, args) -> None:
         start_gate_watcher(kbd)
     cons = open_events(kbd) if args.events else None
     volume = MacVolume() if sys.platform == "darwin" else WindowsVolume()
-    volume.start_poller()
+    # 50 мс: unmute ловится опросом состояния, квант опроса = задержка пуша
+    volume.start_poller(0.05)
     vol_worker = VolumeWorker(kbd, volume, hz=args.vol_hz)
     if not args.no_volume:
         vol_worker.start()
-        volume.on_unmute = vol_worker.push_level   # Unmute → OSD уровня
+        volume.on_unmute = vol_worker.kick   # Unmute → окно воркера (пуш + ретрай)
     ffc0 = start_ffc0_reader(kbd, on_tick=vol_worker.tick if not args.no_volume else None)
     slides = args.monitor_items   # проверенный непустой список (parse_monitor_items в main)
     n_slides = len(slides)
