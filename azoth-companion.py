@@ -1201,6 +1201,7 @@ def run(kbd: M901, args) -> None:
     slides = args.monitor_items   # проверенный непустой список (parse_monitor_items в main)
     n_slides = len(slides)
     slide_warned = set()   # слайды temp/volt, о пропуске которых уже предупредили
+    dead_slides = set()    # структурно несуществующие слайды (gpu.fan и пр.)
     last_pairs = None
     last_bat = None
     warn_bat = True
@@ -1259,11 +1260,32 @@ def run(kbd: M901, args) -> None:
                         slide_tick = int(now / args.slideshow)
                     # Значение очередного слайда; temp/volt без сенсора
                     # пропускаются (однократное предупреждение), автолистание
-                    # двигается дальше.
+                    # двигается дальше. Структурно несуществующий слайд
+                    # (gpu.fan и т.п.) — одно сообщение в лог, дальше слайд
+                    # «мёртв»; мертвы ВСЕ — фолбэк cpu.usage (есть всегда).
                     pairs = None
                     for _ in range(n_slides):
                         name = slides[slide_phase]
-                        val = slide_value(name, args, sensors)
+                        try:
+                            val = slide_value(name, args, sensors)
+                        except Exception as e:
+                            val = None
+                            if name not in dead_slides:
+                                dead_slides.add(name)
+                                log("слайд «%s»: такого сенсора нет (%s)"
+                                    % (name, e))
+                                if len(dead_slides) >= n_slides:
+                                    log("все слайды без сенсоров — фолбэк cpu.usage")
+                                    slides = ["cpu.usage"]
+                                    n_slides = 1
+                                    slide_phase = 0
+                                    slide_tick = int(now / args.slideshow)
+                                    slide_warned.clear()
+                                    last_pairs = None
+                                    break
+                            slide_phase = (slide_phase + 1) % n_slides
+                            slide_tick = int(now / args.slideshow)
+                            continue
                         if val is not None:
                             pairs = [(slide_sel(name), 0, val)]
                             break
