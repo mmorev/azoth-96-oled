@@ -694,12 +694,13 @@ def start_ffc0_reader(kbd, on_tick=None):
             if data:
                 d = bytes(data)
                 q.put(d)
-                # ТОЛЬКО реальные тики объёма (01 = vol+, 04 = vol−). Релиз 00
-                # и нажатие 02 окно громкости НЕ открывают: нажатие качельки —
-                # это mute/unmute, и после релиза окно с «первым кадром»
-                # всплывало с OSD значения на мьюте (регрессия 2026-10-05).
+                # Тики объёма (01 = vol+, 04 = vol−) открывают окно OSD; пресс
+                # 02 окно НЕ открывает — уходит в воркер только как метка
+                # «unmute пришёл от качельки» (нажатие = mute-тоггл; пуш окна
+                # по прессу давал OSD уровня на мьюте — регрессия 2026-10-05).
+                # Релиз 00 не нужен никому.
                 if on_tick and len(d) >= 3 and d[0] == 0x03 and d[1] == 0x72 \
-                        and d[2] in (0x01, 0x04):
+                        and d[2] in (0x01, 0x02, 0x04):
                     on_tick(d[2])
 
     threading.Thread(target=reader, daemon=True).start()
@@ -1104,6 +1105,7 @@ class VolumeWorker(threading.Thread):
 
     WINDOW_S = 0.6
     MAX_HZ = 20.0            # live-порог: 50 мс ок, 40 мс — blink/reset
+    UNMUTE_GRACE_S = 1.0     # пресс → ОС применяет mute за десятки мс (запас на поллер)
 
     def __init__(self, kbd: M901, volume: WindowsVolume | MacVolume,
                  hz: float = 12.0):
@@ -1119,9 +1121,20 @@ class VolumeWorker(threading.Thread):
         self._last = None
         self._was_open = False
         self._stop_evt = False
+        self._press_t = 0.0     # последний пресс качельки (0 = давно) — гейт unmute
 
     def tick(self, code: int) -> None:
+        if code == 0x02:    # пресс качельки: окно НЕ открываем — только метка
+            self._press_t = time.monotonic()   # происхождения для unmute-гейта
+            return
         self._until = time.monotonic() + self.WINDOW_S
+
+    def unmute_gate(self) -> None:
+        """Пушить уровень на unmute только если тот пришёл от пресса качельки:
+        без гейта unmute средствами macOS (F10/пункт меню) тоже пускал OSD
+        (запрос 2026-10-05: пуш — только в ответ на unmute с клавиатуры)."""
+        if time.monotonic() - self._press_t <= self.UNMUTE_GRACE_S:
+            self.kick()
 
     def stop(self) -> None:
         self._stop_evt = True
@@ -1203,7 +1216,7 @@ def run(kbd: M901, args) -> None:
     vol_worker = VolumeWorker(kbd, volume, hz=args.vol_hz)
     if not args.no_volume:
         vol_worker.start()
-        volume.on_unmute = vol_worker.kick   # Unmute → окно воркера (пуш + ретрай)
+        volume.on_unmute = vol_worker.unmute_gate   # пуш — только на unmute качельки
     ffc0 = start_ffc0_reader(kbd, on_tick=vol_worker.tick if not args.no_volume else None)
     slides = args.monitor_items   # проверенный непустой список (parse_monitor_items в main)
     n_slides = len(slides)
