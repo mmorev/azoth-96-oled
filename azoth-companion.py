@@ -57,6 +57,9 @@ SIGBREAK, SIGHUP, SIGQUIT) гасят все виджеты, кроме банн
   Без них слайды temp/volt пропускаются, а --metrics cpu-temp пушит одиночную
   пару usage (fallback, как GearLink с одинарным виджетом). ACPI-термозоны на
   этой машине нет (проверено).
+macOS (Apple Silicon): brew install macmon — температуры CPU/GPU, реальная
+  частота и загрузка GPU без sudo (sudoless IOReport). Без него слайды
+  temp/freq/gpu пропускаются.
 
 GearLink перед запуском закрыть — два хозяина vendor-канала не нужны.
 """
@@ -65,6 +68,7 @@ from __future__ import annotations
 import argparse
 import ctypes                  # MacVolume: CoreAudio (WindowsVolume импортирует лениво)
 import datetime as dt
+import json
 from collections.abc import Callable
 import logging
 import queue
@@ -283,6 +287,9 @@ class HostSensors:
         self._wmi = None
         self._wmi_dead = False    # подсистема LHM в целом (import/namespace)
         self._dead = set()        # «сенсор не найден» — предупреждение один раз на ключ
+        self._mm = None           # последний JSON macmon (macOS)
+        self._mm_t = 0.0
+        self._mm_dead = False     # macmon нет в PATH / не запускается
 
     def cpu_load(self) -> int | None:
         return None if self._p is None else int(round(self._p.cpu_percent(interval=None)))
@@ -297,6 +304,9 @@ class HostSensors:
 
     def _lhm_connect(self, what: str):
         """self._wmi или None; подключение ленивое, отказ — одно предупреждение."""
+        if sys.platform != "win32":
+            self._wmi_dead = True     # LHM/WMI только Windows: на macOS — macmon
+            return None
         if self._wmi is not None:
             return self._wmi
         if self._wmi_dead:
@@ -353,10 +363,54 @@ class HostSensors:
             "именем на «%s») — слайд будет пропускаться" % (what, stype, patterns[0]))
         return None
 
+    def _macmon(self) -> dict | None:
+        """macOS: JSON macmon (brew install macmon, sudoless IOReport) —
+        температуры CPU/GPU, реальная частота кластеров, gpu-usage. Кэш 1.5 с:
+        слайды опрашиваются раз в ~2 с — процесс не спавнится чаще. Нет в
+        PATH / не запустился → None (слайды пропустятся штатно) + одно
+        предупреждение. На других ОС — None (там LHM/psutil)."""
+        if sys.platform != "darwin":
+            return None
+        if self._mm is not None and time.monotonic() - self._mm_t < 1.5:
+            return self._mm
+        if self._mm_dead:
+            return None
+        try:
+            r = subprocess.run(["macmon", "pipe", "-i", "200", "-s", "1"],
+                               capture_output=True, text=True, timeout=3)
+            line = [x for x in r.stdout.splitlines() if x.strip()][-1]
+            self._mm = json.loads(line)
+        except Exception:
+            self._mm_dead = True
+            log("macmon недоступен — слайды temp/freq/gpu на macOS пропускаться "
+                "будут (brew install macmon)")
+            return None
+        self._mm_t = time.monotonic()
+        return self._mm
+
+    def _macmon_val(self, path: list, scale: float = 1.0) -> int | None:
+        """Число из JSON macmon по пути ключей или None."""
+        m = self._macmon()
+        if m is None:
+            return None
+        v: object = m
+        for k in path:
+            v = v.get(k) if isinstance(v, dict) else None
+            if v is None:
+                return None
+        try:
+            return int(round(float(v) * scale))
+        except (TypeError, ValueError):
+            return None
+
     # --- канонические поставщики значений слайдов ---
     def cpu_temp(self) -> int | None:
-        """°C пакета CPU: LHM Temperature («CPU Package»); ACPI-термозоны не
-        считаем — на тестовой машине их нет (проверено)."""
+        """°C пакета CPU: macOS — macmon (cpu_temp_avg); Windows — LHM
+        Temperature («CPU Package»); ACPI-термозоны не считаем — на
+        тестовой машине их нет (проверено)."""
+        t = self._macmon_val(["temp", "cpu_temp_avg"])
+        if t is not None:
+            return t
         return self._lhm_pick("cpu.temp", "Temperature",
                               ("cpu package", "package", "cpu"),
                               "температура CPU (Package)")
@@ -369,7 +423,12 @@ class HostSensors:
                               scale=1000)
 
     def cpu_freq_mhz(self) -> int:
-        """МГц текущей частоты CPU (psutil); при ошибке 0 (никогда не None)."""
+        """МГц текущей частоты CPU: macOS — macmon (pcpu_freq_mhz, реальные
+        кластеры P-ядер); иначе psutil (на AS вернёт базовую). При ошибке
+        0 (никогда не None)."""
+        v = self._macmon_val(["pcpu_freq_mhz"])
+        if v:
+            return v
         try:
             f = self._p.cpu_freq()
             return int(round(f.current)) if f and f.current else 0
@@ -377,17 +436,29 @@ class HostSensors:
             return 0
 
     def gpu_usage(self) -> int | None:
-        """% загрузки GPU: LHM Load («GPU Core», иначе любой GPU-датчик)."""
+        """% загрузки GPU: macOS — macmon (gpu_active_ratio); Windows — LHM
+        Load («GPU Core», иначе любой GPU-датчик)."""
+        u = self._macmon_val(["gpu_active_ratio"], scale=100)
+        if u is not None:
+            return u
         return self._lhm_pick("gpu.usage", "Load", ("gpu core", "gpu"),
                               "загрузка GPU")
 
     def gpu_temp(self) -> int | None:
-        """°C GPU: LHM Temperature («GPU Core», «Hot Spot», любой GPU)."""
+        """°C GPU: macOS — macmon (gpu_temp_avg); Windows — LHM Temperature
+        («GPU Core», «Hot Spot», любой GPU)."""
+        t = self._macmon_val(["temp", "gpu_temp_avg"])
+        if t is not None:
+            return t
         return self._lhm_pick("gpu.temp", "Temperature",
                               ("gpu core", "hot spot", "gpu"), "температура GPU")
 
     def gpu_freq(self) -> int | None:
-        """МГц GPU: LHM Clock («GPU Core»)."""
+        """МГц GPU: macOS — macmon (gpu_freq_mhz); Windows — LHM Clock
+        («GPU Core»)."""
+        f = self._macmon_val(["gpu_freq_mhz"])
+        if f is not None:
+            return f
         return self._lhm_pick("gpu.freq", "Clock", ("gpu core", "gpu"),
                               "частота GPU")
 
@@ -1168,9 +1239,11 @@ def run(kbd: M901, args) -> None:
                             break
                         if name not in slide_warned:
                             slide_warned.add(name)
-                            log("слайд «%s» пропущен: сенсор недоступен — нужен "
-                                "запущенный LibreHardwareMonitor (pip install wmi)"
-                                % name)
+                            need = ("macmon (brew install macmon)"
+                                    if sys.platform == "darwin" else
+                                    "запущенный LibreHardwareMonitor (pip install wmi)")
+                            log("слайд «%s» пропущен: сенсор недоступен — нужен %s"
+                                % (name, need))
                         slide_phase = (slide_phase + 1) % n_slides
                         slide_tick = int(now / args.slideshow)
                 else:
