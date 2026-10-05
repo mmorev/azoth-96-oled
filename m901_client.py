@@ -12,6 +12,7 @@ import struct
 import sys
 import threading
 import time
+from contextlib import suppress
 
 # Хук журналирования транзакций: (cmd, sub, echo, ответ|None, nak, мс).
 # Прототип включает его в режиме --evt-dump для корреляции NAK с событиями.
@@ -21,6 +22,18 @@ try:
     import hid
 except ImportError:
     raise SystemExit("pip install hidapi")
+
+if sys.platform == "darwin":
+    # macOS: свежий hidapi открывает устройства в exclusive-режиме (seize) —
+    # наш хендл выгоняет системный HID-стек с общего EP, и ОС перестаёт видеть
+    # consumer-события качельки (iface2: громкость 0x0C и зеркало 0xFFC0 сидят
+    # на одном USB-интерфейсе; громкость не меняется). Переводим в не-exclusive
+    # как на Windows: репорты доставляются всем клиентам. Вызов глобальный,
+    # ДО первого hid.device().open; на старом hidapi (символа нет) и так
+    # не-exclusive по умолчанию.
+    import ctypes
+    with suppress(OSError, AttributeError):
+        ctypes.CDLL(hid.__file__).hid_darwin_set_open_exclusive(0)
 
 VID = 0x0B05
 PID = 0x1C10           # APP-режим (bootloader - другой PID, не входит в поставку)

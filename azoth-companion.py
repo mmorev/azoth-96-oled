@@ -63,7 +63,9 @@ GearLink перед запуском закрыть — два хозяина ve
 from __future__ import annotations
 
 import argparse
+import ctypes                  # MacVolume: CoreAudio (WindowsVolume импортирует лениво)
 import datetime as dt
+from collections.abc import Callable
 import logging
 import queue
 import shutil
@@ -724,7 +726,7 @@ class WindowsVolume:
         self._cache = None      # значение из фонового поллера
         self._cache_t = 0.0
         self._muted = None      # None = ещё не знаем
-        self.on_unmute = None   # колбэк «mute снят» (пуш уровня на OSD)
+        self.on_unmute: Callable[[], None] | None = None   # колбэк «mute снят» (пуш уровня на OSD)
         self._stop = threading.Event()
         self._init_com()
 
@@ -860,6 +862,127 @@ class WindowsVolume:
         self._stop.set()
 
 
+class MacVolume:
+    """Мастер-громкость вывода macOS через CoreAudio (чистый ctypes, без
+    зависимостей). Интерфейс 1:1 с WindowsVolume: percent/fresh/nudge/muted/
+    start_poller/stop/on_unmute. Читаем каждое значение напрямую — полный
+    цикл (default device + volume + mute) ~0.07 мс, кэш и поллер — как у
+    винды. macOS 26 сменила fourcc-селекторы ('defa'→'dOut', volume →
+    'volm'), старые возвращают 'who?', поэтому каждый селектор — цепочка
+    новых + легаси, рабочий вариант кэшируется первым успехом."""
+
+    _GLOB = 0x676C6F62          # 'glob'
+    _OUTP = 0x6F757470          # 'outp'
+
+    def __init__(self):
+        self._ca = None
+        self._sel = {}          # ключ свойства → рабочий fourcc (1-й успех)
+        self._cache = None
+        self._cache_t = 0.0
+        self._muted_live = None
+        self._muted = None      # прошлое состояние — детектор unmute в поллере
+        self.on_unmute: Callable[[], None] | None = None
+        self._stop = threading.Event()
+        try:
+            import ctypes
+            self._ct = ctypes
+            self._ca = ctypes.CDLL(
+                "/System/Library/Frameworks/CoreAudio.framework/CoreAudio")
+            self._ca.AudioObjectGetPropertyData.restype = ctypes.c_uint32
+            self._ca.AudioObjectGetPropertyData.argtypes = [
+                ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32,
+                ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32),
+                ctypes.c_void_p]
+        except Exception as e:
+            log("CoreAudio недоступен (%s) — OSD громкости работать не будет" % e)
+
+    class _AOPA(ctypes.Structure):
+        _fields_ = [("sel", ctypes.c_uint32), ("scope", ctypes.c_uint32),
+                    ("elem", ctypes.c_uint32)]
+
+    def _get(self, key: str, fourccs: tuple[int, ...], oid: int, scope: int,
+             typ) -> int | float | None:
+        """Свойство объекта по цепочке селекторов (macOS 26+ / легаси).
+        Рабочий fourcc кэшируется — дальше один CA-вызов."""
+        if self._ca is None:
+            return None
+        ct = self._ct
+        sel = self._sel.get(key)
+        for f in ([sel] if sel is not None else fourccs):
+            addr = self._AOPA(f, scope, 0)
+            v = typ()
+            sz = ct.c_uint32(ct.sizeof(typ))
+            st = self._ca.AudioObjectGetPropertyData(
+                oid, ctypes.byref(addr), 0, None, ctypes.byref(sz),
+                ctypes.byref(v))
+            if st == 0:
+                self._sel[key] = f
+                return v.value
+        return None
+
+    def _read(self):
+        """(vol 0..1, muted) или None. Дефолтное устройство — на каждый запрос:
+        при переключении вывода id меняется, lookup копеечный."""
+        dev = self._get("dev", (0x644F7574, 0x64656661),   # 'dOut' / 'defa'
+                        1, self._GLOB, self._ct.c_uint32)
+        if dev is None:
+            return None
+        vol = self._get("vol", (0x766F6C6D, 0x766F6C75),   # 'volm' / 'volu'
+                        int(dev), self._OUTP, self._ct.c_float)
+        if vol is None:
+            return None
+        mute = self._get("mute", (0x6D757465,),            # 'mute'
+                         int(dev), self._OUTP, self._ct.c_uint32)
+        return vol, bool(mute)
+
+    def fresh(self) -> int | None:
+        r = self._read()
+        if r is None:
+            return None
+        self._cache = max(0, min(100, int(round(r[0] * 100))))
+        self._cache_t = time.monotonic()
+        self._muted_live = r[1]
+        return self._cache
+
+    def percent(self) -> int | None:
+        if self._cache is not None and time.monotonic() - self._cache_t < 0.5:
+            return self._cache
+        return self.fresh()
+
+    def nudge(self, v: int) -> None:
+        self._cache = max(0, min(100, int(v)))
+        self._cache_t = time.monotonic()
+
+    def muted(self) -> bool | None:
+        return self._muted_live
+
+    def start_poller(self, interval: float = 0.1) -> None:
+        self._cache_t = 0.0
+        self._cache = None
+
+        def poll():
+            while not self._stop.is_set():
+                try:
+                    self.percent()
+                    m = self.muted()
+                    if m is not None:
+                        if self._muted and not m and self.on_unmute:
+                            try:
+                                self.on_unmute()
+                            except Exception:
+                                pass
+                        self._muted = m
+                except Exception:
+                    pass
+                self._stop.wait(interval)
+
+        self._stop.clear()
+        threading.Thread(target=poll, daemon=True).start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+
 class VolumeWorker(threading.Thread):
     """Стрельба `51 0C` со СТРОГОЙ каденцией в окне серии (live-калибровка
     2026-10-05: интервалы <50 мс ломают OSD-слой — заморозка/блинк/ресеты;
@@ -877,7 +1000,8 @@ class VolumeWorker(threading.Thread):
     WINDOW_S = 0.6
     MAX_HZ = 20.0            # live-порог: 50 мс ок, 40 мс — blink/reset
 
-    def __init__(self, kbd: M901, volume: WindowsVolume, hz: float = 12.0):
+    def __init__(self, kbd: M901, volume: WindowsVolume | MacVolume,
+                 hz: float = 12.0):
         super().__init__(daemon=True)
         self._kbd = kbd
         self._vol = volume
@@ -966,7 +1090,7 @@ def run(kbd: M901, args) -> None:
                 "NAK" if nak else (r[:8].hex(" ") if r else "нет-ответа"), ms))
         start_gate_watcher(kbd)
     cons = open_events(kbd) if args.events else None
-    volume = WindowsVolume()
+    volume = MacVolume() if sys.platform == "darwin" else WindowsVolume()
     volume.start_poller()
     vol_worker = VolumeWorker(kbd, volume, hz=args.vol_hz)
     if not args.no_volume:
