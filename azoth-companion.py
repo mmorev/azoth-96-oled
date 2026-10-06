@@ -289,8 +289,8 @@ class HostSensors:
         self._wmi = None
         self._wmi_dead = False    # the LHM subsystem as a whole (import/namespace)
         self._dead = set()        # "sensor not found" — one warning per key
-        self._mm = None           # the last macmon JSON (macOS)
-        self._mm_t = 0.0
+        self._mm = None           # the last macmon JSON (macOS, background reader)
+        self._mm_reader = None   # the macmon pipe reader thread (started lazily)
         self._mm_dead = False     # macmon is not in PATH / does not run
 
     def cpu_load(self) -> int | None:
@@ -365,30 +365,50 @@ class HostSensors:
             "with a name containing \"%s\") — the slide will be skipped" % (what, stype, patterns[0]))
         return None
 
+    def _macmon_reader(self) -> None:
+        """The background `macmon pipe` reader (no -s = an infinite stream,
+        ~5 Hz): we keep the last parsed frame. Spawn-per-query with -s 1
+        (run+timeout=3) cost 0.9–1.6 s per cold call — the daemon loop period
+        wandered 1–2.6 s: a ragged slideshow rhythm and a swipe processed
+        with up to a full period delay. A broken stream (a brew update) —
+        up to 3 empty attempts, then give up (the slides are skipped
+        normally)."""
+        tries = 0
+        while tries < 3:
+            got = False
+            with suppress(Exception):
+                proc = subprocess.Popen(["macmon", "pipe", "-i", "200"],
+                                        stdout=subprocess.PIPE,
+                                        stderr=subprocess.DEVNULL, text=True)
+                for line in proc.stdout or ():
+                    got = True
+                    try:
+                        self._mm = json.loads(line)
+                    except ValueError:
+                        continue         # a partial/broken frame — wait for the next one
+            tries = 0 if got else tries + 1
+            if not got:
+                time.sleep(1.0)          # the stream gave no frames — retry, then give up
+        self._mm_dead = True
+        if self._mm is None:
+            log("macmon unavailable — the temp/freq/gpu slides on macOS will be "
+                "skipped (brew install macmon)")
+
     def _macmon(self) -> dict | None:
         """macOS: the macmon JSON (brew install macmon, sudoless IOReport) —
-        the CPU/GPU temperatures, the real cluster frequency, the gpu usage.
-        A 1.5 s cache: the slides are polled every ~2 s — the process is not
-        spawned more often. Not in PATH / did not run → None (the slides are
-        skipped normally) + a single warning. On other OSes — None (LHM/psutil
+        the CPU/GPU temperatures, the real cluster frequency, the gpu usage,
+        the fans. Not in PATH / did not run → None (the slides are skipped
+        normally) + a single warning. On other OSes — None (LHM/psutil
         there)."""
         if sys.platform != "darwin":
             return None
-        if self._mm is not None and time.monotonic() - self._mm_t < 1.5:
-            return self._mm
         if self._mm_dead:
             return None
-        try:
-            r = subprocess.run(["macmon", "pipe", "-i", "200", "-s", "1"],
-                               capture_output=True, text=True, timeout=3)
-            line = [x for x in r.stdout.splitlines() if x.strip()][-1]
-            self._mm = json.loads(line)
-        except Exception:
-            self._mm_dead = True
-            log("macmon unavailable — the temp/freq/gpu slides on macOS will be "
-                "skipped (brew install macmon)")
-            return None
-        self._mm_t = time.monotonic()
+        if self._mm_reader is None:
+            self._mm_reader = threading.Thread(target=self._macmon_reader,
+                                               daemon=True)
+            self._mm_reader.start()
+            time.sleep(1.2)              # let the first frame arrive (~0.9 s sample)
         return self._mm
 
     def _macmon_val(self, path: list, scale: float = 1.0) -> int | None:
@@ -1248,8 +1268,13 @@ def run(kbd: M901, args) -> None:
     last_bat = None
     warn_bat = True
     slide_phase = 0
-    slide_tick = -1
-    hold_until = 0.0       # the auto-paging pause after a manual swipe
+    pending_swipes = 0    # the swipes pulled out of the queue by the loop tail
+                          # wakeup (get() removes the frame — without this
+                          # counter they were lost and the swipe "did not work")
+    hold_until = 0.0       # the moment of the next auto-page advance
+                           # (monotonic; a swipe sets now + SWIPE_PAUSE_S —
+                           # a swipe and an auto tick cannot coincide, no
+                           # double jumps)
     last_min = None        # the minute of the last clock sync
     last_push_t = 0.0      # the heartbeat: an unconditional push every HEARTBEAT_S
     t_wake = t_stat = time.monotonic()
@@ -1274,6 +1299,8 @@ def run(kbd: M901, args) -> None:
             # The 0xFFC0 drain is always needed (the queue must not grow); the
             # rocker ticks go to the VolumeWorker straight from the reader thread.
             swipes, _ticks = poll_ffc0(ffc0, dump=args.evt_dump) if ffc0 else (0, 0)
+            swipes += pending_swipes
+            pending_swipes = 0
             if do_monitor:
                 if args.slideshow:
                     # The slideshow like GearLink's (§10.6): the tile is
@@ -1288,19 +1315,13 @@ def run(kbd: M901, args) -> None:
                         slide_phase = (slide_phase + swipes) % n_slides
                         last_pairs = None
                         hold_until = now + SWIPE_PAUSE_S
-                        slide_tick = int(now / args.slideshow)
                         log("swipe down → slide %d/%d \"%s\" (the auto-paging paused for %g s)"
                             % (slide_phase + 1, n_slides, slides[slide_phase],
                                SWIPE_PAUSE_S))
                     elif now >= hold_until:
-                        tick = int(now / args.slideshow)
-                        if tick != slide_tick:
-                            slide_tick = tick
-                            slide_phase = (slide_phase + 1) % n_slides
-                            last_pairs = None
-                    else:
-                        # paused: keep the current frame and the timer phase
-                        slide_tick = int(now / args.slideshow)
+                        slide_phase = (slide_phase + 1) % n_slides
+                        last_pairs = None
+                        hold_until = now + args.slideshow
                     # The value of the next slide; temp/volt without a sensor
                     # are skipped (a one-time warning), the auto-paging moves
                     # on. A structurally nonexistent slide (gpu.fan etc.) —
@@ -1322,12 +1343,10 @@ def run(kbd: M901, args) -> None:
                                     slides = ["cpu.usage"]
                                     n_slides = 1
                                     slide_phase = 0
-                                    slide_tick = int(now / args.slideshow)
                                     slide_warned.clear()
                                     last_pairs = None
                                     break
                             slide_phase = (slide_phase + 1) % n_slides
-                            slide_tick = int(now / args.slideshow)
                             continue
                         if val is not None:
                             pairs = [(slide_sel(name), 0, val)]
@@ -1340,7 +1359,6 @@ def run(kbd: M901, args) -> None:
                             log("the slide \"%s\" is skipped: the sensor is unavailable — %s is needed"
                                 % (name, need))
                         slide_phase = (slide_phase + 1) % n_slides
-                        slide_tick = int(now / args.slideshow)
                 else:
                     pairs = resolve_pairs(args, sensors)
                 if pairs is not None and (
@@ -1382,8 +1400,24 @@ def run(kbd: M901, args) -> None:
                     % (kbd.get_battery(), kbd.get_current_slot(),
                        kbd.get_current_page()))
                 t_stat = now
-            # wait, not sleep: STOP wakes up immediately, without waiting out the timeout
-            STOP.wait(1.0 if args.slideshow else (0.4 if args.demo else args.interval))
+            # wait, not sleep: STOP wakes up immediately, without waiting out
+            # the timeout. In the slideshow mode we sleep on the 0xFFC0 queue:
+            # a swipe wakes the loop instantly (STOP.wait slept out the whole
+            # period — the swipe was processed with a delay and landed right
+            # next to the auto tick = a double jump). The timeout — until the
+            # next auto-page advance; the 0395 heartbeat ~1 Hz keeps the
+            # usual iteration rate. IMPORTANT: get() REMOVES the frame — a
+            # swipe is counted into pending_swipes, otherwise it was lost.
+            if args.slideshow and ffc0:
+                delay = min(1.0, max(0.05, hold_until - time.monotonic()))
+                with suppress(queue.Empty):
+                    d = ffc0.get(timeout=delay)
+                    if args.evt_dump:
+                        log("ffc0: %s" % d[:20].hex(" "))
+                    if len(d) >= 3 and d[0] == 0x03 and d[1] == 0x96:
+                        pending_swipes += 1
+            else:
+                STOP.wait(1.0 if args.slideshow else (0.4 if args.demo else args.interval))
     finally:
         vol_worker.stop()
         volume.stop()
