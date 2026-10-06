@@ -766,10 +766,11 @@ def parse_monitor_items(spec: str | None) -> list[str]:
     """--monitor-items "cpu.usage,gpu.temp,…" → a validated list of canonical
     names. The "source.metric" format — the GearLink config grid
     (PROTOCOL_OLED.md §10.5): the sources cpu/gpu/ram, the metrics
-    usage/temp/freq/volt. The short first-draft names (cpu, ram, temp, …)
-    are accepted as aliases. An unknown name and an empty list are a startup
-    error; duplicates collapse, the order is preserved; None (the flag not
-    given) → the default set."""
+    usage/temp/freq/volt. A "a+b" pair (exactly two tiles) is pushed as one
+    0x66 with two pairs — the double tile. The short first-draft names
+    (cpu, ram, temp, …) are accepted as aliases. An unknown name and an
+    empty list are a startup error; duplicates collapse, the order is
+    preserved; None (the flag not given) → the default set."""
     if spec is None:
         return list(DEFAULT_SLIDES)
     names, seen = [], set()
@@ -777,16 +778,22 @@ def parse_monitor_items(spec: str | None) -> list[str]:
         token = raw.strip().lower()
         if not token:
             continue
-        token = SLIDE_ALIASES.get(token, token)
-        parts = token.split(".")
-        if (len(parts) != 2 or parts[0] not in SLIDE_SOURCES
-                or parts[1] not in SLIDE_METRICS):
+        halves = [SLIDE_ALIASES.get(h, h) for h in token.split("+")]
+        if len(halves) > 2:
             raise SystemExit(
-                "--monitor-items: unknown name \"%s\"; the format is "
-                "\"source.metric\": the sources %s, the metrics %s; the short "
-                "names (%s) are accepted too"
-                % (raw.strip(), "/".join(SLIDE_SOURCES),
-                   "/".join(SLIDE_METRICS), ", ".join(SLIDE_ALIASES)))
+                "--monitor-items: \"%s\": a pair is at most two tiles \"a+b\""
+                % raw.strip())
+        for h in halves:
+            parts = h.split(".")
+            if (len(parts) != 2 or parts[0] not in SLIDE_SOURCES
+                    or parts[1] not in SLIDE_METRICS):
+                raise SystemExit(
+                    "--monitor-items: unknown name \"%s\"; the format is "
+                    "\"source.metric\" or a pair \"a+b\": the sources %s, the "
+                    "metrics %s; the short names (%s) are accepted too"
+                    % (raw.strip(), "/".join(SLIDE_SOURCES),
+                       "/".join(SLIDE_METRICS), ", ".join(SLIDE_ALIASES)))
+        token = "+".join(halves)
         if token not in seen:
             seen.add(token)
             names.append(token)
@@ -1281,8 +1288,10 @@ def run(kbd: M901, args) -> None:
     if do_monitor:
         if args.slideshow:
             mode_desc = "a slideshow %.1f s [%s]" % (args.slideshow, ",".join(slides))
-            log("slides: %s" % " → ".join("%s(0x%02X)" % (n, slide_sel(n))
-                                          for n in slides))
+            log("slides: %s" % " → ".join(
+                "%s(%s)" % (n, "+".join("0x%02X" % slide_sel(h)
+                                        for h in n.split("+")))
+                for n in slides))
         else:
             mode_desc = args.metrics
     else:
@@ -1330,8 +1339,10 @@ def run(kbd: M901, args) -> None:
                     pairs = None
                     for _ in range(n_slides):
                         name = slides[slide_phase]
+                        halves = name.split("+")
                         try:
-                            val = slide_value(name, args, sensors)
+                            vals = [slide_value(h, args, sensors)
+                                    for h in halves]
                         except Exception as e:
                             val = None
                             if name not in dead_slides:
@@ -1348,23 +1359,33 @@ def run(kbd: M901, args) -> None:
                                     break
                             slide_phase = (slide_phase + 1) % n_slides
                             continue
-                        if val is not None:
-                            pairs = [(slide_sel(name), 0, val)]
+                        if all(v is not None for v in vals):
+                            # a "a+b" pair — one 0x66 with two pairs (the
+                            # double tile); a single — one pair
+                            pairs = [(slide_sel(h), 0, v)
+                                     for h, v in zip(halves, vals)]
                             break
-                        if name not in slide_warned:
-                            slide_warned.add(name)
-                            need = ("macmon (brew install macmon)"
-                                    if sys.platform == "darwin" else
-                                    "a running LibreHardwareMonitor (pip install wmi)")
-                            log("the slide \"%s\" is skipped: the sensor is unavailable — %s is needed"
-                                % (name, need))
+                        for h, v in zip(halves, vals):
+                            if v is None and h not in slide_warned:
+                                slide_warned.add(h)
+                                need = ("macmon (brew install macmon)"
+                                        if sys.platform == "darwin" else
+                                        "a running LibreHardwareMonitor (pip install wmi)")
+                                log("the slide \"%s\" is skipped: the sensor is unavailable — %s is needed"
+                                    % (h, need))
                         slide_phase = (slide_phase + 1) % n_slides
                 else:
                     pairs = resolve_pairs(args, sensors)
                 if pairs is not None and (
                         pairs_differ(pairs, last_pairs)
                         or now - last_push_t >= HEARTBEAT_S):
-                    if robust_push(kbd, kbd.push_metrics, pairs):
+                    # A "a+b" pair is pushed with echo=1: the on-screen layout
+                    # follows the echo of the last push — echo=0 renders the top
+                    # tile only, echo=1 — both cells (live test 2026-10-06); the
+                    # 0396 swipes still reach the host normally (20 swipes
+                    # received during echo=1 pushes every 2 s).
+                    if robust_push(kbd, kbd.push_metrics, pairs,
+                                   1 if len(pairs) == 2 else 0):
                         log("the 0x66 push: " + ", ".join(
                             "%s=%d" % (pair_label(sel, dig), val)
                             for sel, dig, val in pairs))
@@ -1705,7 +1726,9 @@ def main() -> None:
                    help="comma-separated slides, the \"source.metric\" format — "
                         "the GearLink config grid: the sources cpu/gpu/ram, "
                         "the metrics usage/temp/freq/volt/fan, e.g. cpu.usage,"
-                        "cpu.freq,ram.usage,gpu.temp; ram is drawn with the "
+                        "cpu.freq,ram.usage,gpu.temp; a pair \"a+b\" (two tiles "
+                        "in one 0x66 push, the double tile) is accepted too, e.g. "
+                        "cpu.usage+ram.usage; ram is drawn with the "
                         "\"DRAM0\" header (0x30), gpu — \"GPU0\" (0x10); the sensor "
                         "slides (all temp/freq/volt and gpu.usage) require a "
                         "running LibreHardwareMonitor — without a sensor the "

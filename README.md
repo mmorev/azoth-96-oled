@@ -440,6 +440,21 @@ the GearLink config grid; it is also the nibble layout of the 0x66 selector
   `HostSensors._lhm_pick`); the GPU/RAM sensors are platform-dependent — if
   LHM doesn't export them, the slide silently goes to skip after a single
   warning.
+- **Double tiles — `a+b` pairs**: `--monitor-items
+  cpu.usage+ram.usage,cpu.temp,cpu.fan` — a pair goes out as ONE `0x66`
+  with two pairs (both cells live, the double tile). At most two halves;
+  if one half has no sensor, the whole slide is skipped (a single warning
+  per missing half). Aliases work inside pairs (`cpu+ram`).
+- **The visible layout follows the echo of the last push** (live test
+  2026-10-06): `echo=0` renders the top tile only (the second cell falls
+  back to "CPU0 Usage 0" — the neutral pair), `echo=1` renders both cells.
+  Therefore pair slides are pushed with `echo=1`, singles with `echo=0`.
+  The "echo=1 eats swipes" note above does NOT reproduce at the slideshow
+  cadence: 20× `0396` received during `echo=1` pushes every 2 s (a 30 s
+  window). This also closes the "pairing value↔type" live test from
+  PROTOCOL_OLED.md §10.3.2: the handler writes both pairs into the tile
+  table; the second cell is just not rendered unless the push goes through
+  the `echo=1` path.
 
 ### Log file (v0.3)
 
