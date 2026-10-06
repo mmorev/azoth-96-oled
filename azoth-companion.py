@@ -1,72 +1,72 @@
 #!/usr/bin/env python3
 """
-Azoth Companion v0.3 — прототип замены GearLink для ASUS ROG Azoth 96 HE (M901).
+Azoth Companion v0.3 — a GearLink replacement prototype for the ASUS ROG Azoth 96 HE (M901).
 
-Модель протокола снята с живого захвата GearLink 2026-10-04
-(C:/azoth-capture/16 и 18, расшифровка в README.md):
+The protocol model was taken from a live GearLink capture of 2026-10-04
+(C:/azoth-capture/16 and 18, the breakdown is in README.md):
 
-  • старт:            `65 FF` (wake) → опционально `6A`-включение слотов +
-                       `68` яркость + `50 55` commit (ТОЛЬКО при смене маски);
-  • значения (без commit): `66` CPU usage/temp → слот 3,
-                       `64` батарея ПК % → слот 2,
-                       `63` дата+время → слот 1 (циферблат рисует устройство);
-  • слоты: 0 = баннер/music mode (не трогаем), 1 = часы, 2 = батарея,
-                       3 = двойной индикатор, 4 = карусель мониторинга;
-  • polling GearLink: `12 01`/`12 00` раз в ~30 с, `27` пинг — в v0.2 не критично.
+  • startup:          `65 FF` (wake) → optionally the `6A` slot enables +
+                      `68` brightness + `50 55` commit (ONLY on a mask change);
+  • values (no commit): `66` CPU usage/temp → slot 3,
+                      `64` the PC battery % → slot 2,
+                      `63` date+time → slot 1 (the device draws the dial itself);
+  • slots: 0 = the banner/music mode (leave alone), 1 = the clock, 2 = the battery,
+                      3 = the double indicator, 4 = the monitoring carousel;
+  • GearLink polling: `12 01`/`12 00` every ~30 s, the `27` ping — not critical in v0.2.
 
-Запуск:
-  python azoth-companion.py                         # только баннер (слот 0) + OSD качельки
+Running:
+  python azoth-companion.py                         # the banner (slot 0) only + the rocker OSD
   python azoth-companion.py --clock --battery --monitor
-                                            # классический набор GearLink
-  python azoth-companion.py --monitor --slideshow 3 # слайдшоу cpu.usage → ram.usage → cpu.freq
+                                            # the classic GearLink set
+  python azoth-companion.py --monitor --slideshow 3 # a slideshow of cpu.usage → ram.usage → cpu.freq
   python azoth-companion.py --monitor-items cpu.usage,gpu.temp,freq
-                                            # свой набор (включает слайдшоу, 2 с)
+                                            # a custom set (enables the slideshow, 2 s)
   python azoth-companion.py --monitor-items cpu.usage,temp --slideshow 5 --log-file
-                                            # то же + дублировать лог в logs/azoth-companion.log
-  python azoth-companion.py --install-autostart     # автозапуск при логоне (pythonw, планировщик)
-  python azoth-companion.py --uninstall-autostart   # убрать задачу автозапуска
-  python azoth-companion.py --once --cpu 42 --bat 77   # разовая проверка
-  python azoth-companion.py --status                # только чтение статуса, ничего не менять
-  python azoth-companion.py --demo --bat 42         # тест сенсоров: 0→100→0 (~5.5 с в сторону)
+                                            # the same + mirror the log into logs/azoth-companion.log
+  python azoth-companion.py --install-autostart     # start at logon (pythonw, the scheduler)
+  python azoth-companion.py --uninstall-autostart   # remove the autostart task
+  python azoth-companion.py --once --cpu 42 --bat 77   # a one-shot check
+  python azoth-companion.py --status                # read the status only, change nothing
+  python azoth-companion.py --demo --bat 42         # a sensor test: 0→100→0 (~5.5 s each way)
 
-Виджеты = слоты: --banner (0), --clock (1), --battery (2), --monitor (3),
---kps (4); без флагов включён только баннер. Флаги контента включают свой
-виджет автоматически: --metrics/--slideshow/--monitor-items/--demo/--cpu/
+The widgets = the slots: --banner (0), --clock (1), --battery (2), --monitor (3),
+--kps (4); without flags only the banner is enabled. The content flags enable
+their widget automatically: --metrics/--slideshow/--monitor-items/--demo/--cpu/
 --temp/--ram-val → --monitor, --bat → --battery.
 
-Graceful shutdown: Ctrl+C и обрабатываемые сигналы завершения (SIGTERM,
-SIGBREAK, SIGHUP, SIGQUIT) гасят все виджеты, кроме баннера, — без демона
-часы/батарея/метрики показывают протухшие данные. Офлайн живут только
-баннер и KPS; пустая маска для OLED некорректна, поэтому если демона
-запускали без баннера, при останове он включается обратно. --once/--status
-раскладку не глушат (--once оставляет её на экране для сверки).
+Graceful shutdown: Ctrl+C and the handled termination signals (SIGTERM,
+SIGBREAK, SIGHUP, SIGQUIT) turn off all the widgets except the banner — without
+the daemon the clock/battery/metrics show stale data. Only the banner and KPS
+live offline; an empty mask is invalid for the OLED, so if the daemon was started
+without a banner, it gets re-enabled on shutdown. --once/--status do not turn
+the layout off (--once leaves it on screen for visual verification).
 
-Слайды --monitor-items (формат «источник.метрика», сетка конфига GearLink):
-  источники cpu / gpu / ram, метрики usage / temp / freq / fan / volt — например
-  cpu.usage, cpu.temp, cpu.freq, cpu.volt, ram.usage, gpu.temp. Источник ram
-  рисуется заголовком «DRAM0» (селектор 0x30), gpu — «GPU0» (0x10). Короткие
-  имена первой редакции (cpu, gpu, ram, usage, temp, freq, volt) принимаются
-  как алиасы. Сенсорные слайды (все temp/freq/volt и gpu.usage) требуют
-  запущенный LibreHardwareMonitor — без сенсора слайд пропускается с одним
-  предупреждением. Свайп вниз листает слайды вручную (пауза автолистания
-  5 с); вверх прошивка хосту не сообщает.
+The --monitor-items slides (the "source.metric" format, the GearLink config grid):
+  the sources cpu / gpu / ram, the metrics usage / temp / freq / fan / volt — e.g.
+  cpu.usage, cpu.temp, cpu.freq, cpu.volt, ram.usage, gpu.temp. The ram source is
+  drawn with the "DRAM0" header (the selector 0x30), gpu — "GPU0" (0x10). The short
+  first-draft names (cpu, gpu, ram, usage, temp, freq, volt) are accepted as
+  aliases. The sensor slides (all temp/freq/volt and gpu.usage) require
+  a running LibreHardwareMonitor — without a sensor the slide is skipped with a
+  single warning. A swipe down pages the slides manually (a 5 s auto-paging
+  pause); up is not reported by the firmware.
 
-Зависимости: pip install hidapi psutil
-Температура/вольтаж CPU: запустить LibreHardwareMonitor.exe и pip install wmi
-  (читаем WMI root\\LibreHardwareMonitor, сенсоры «CPU Package» и Voltage).
-  Без них слайды temp/volt пропускаются, а --metrics cpu-temp пушит одиночную
-  пару usage (fallback, как GearLink с одинарным виджетом). ACPI-термозоны на
-  этой машине нет (проверено).
-macOS (Apple Silicon): brew install macmon — температуры CPU/GPU, реальная
-  частота и загрузка GPU без sudo (sudoless IOReport). Без него слайды
-  temp/freq/gpu пропускаются.
+Dependencies: pip install hidapi psutil
+The CPU temperature/voltage: run LibreHardwareMonitor.exe and pip install wmi
+  (we read the WMI root\\LibreHardwareMonitor, the "CPU Package" and Voltage sensors).
+  Without them the temp/volt slides are skipped, and --metrics cpu-temp pushes a
+  single usage pair (a fallback, like GearLink with a single widget). There is no
+  ACPI thermal zone on this machine (verified).
+macOS (Apple Silicon): brew install macmon — the CPU/GPU temperatures, the real
+  frequency and the GPU load without sudo (sudoless IOReport). Without it the
+  temp/freq/gpu slides are skipped.
 
-GearLink перед запуском закрыть — два хозяина vendor-канала не нужны.
+Close GearLink before running — two owners of the vendor channel are not welcome.
 """
 from __future__ import annotations
 
 import argparse
-import ctypes                  # MacVolume: CoreAudio (WindowsVolume импортирует лениво)
+import ctypes                  # MacVolume: CoreAudio (WindowsVolume imports it lazily)
 import datetime as dt
 import json
 from collections.abc import Callable
@@ -84,72 +84,73 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "analysis"))
 
-from m901_client import M901  # noqa: E402  (нужен pip install hidapi)
+from m901_client import M901  # noqa: E402  (requires pip install hidapi)
 import m901_client  # noqa: E402
 
-# Слоты-виджеты (подтверждено маской GearLink в живой сессии 2026-10-04:
-# минимальная конфигурация часы+батарея+CPU дала маску [0,1,1,1,0])
-SLOT_BANNER = 0       # баннер / music mode / кастомный битмап — не трогаем
-SLOT_CLOCK = 1        # часы: контент = push 0x63
-SLOT_BATTERY = 2      # батарея ПК: контент = push 0x64 <проценты>
-SLOT_MONITOR = 3      # ДВОЙНОЙ индикатор (два тайла): контент = push 0x66
-SLOT_KPS = 4          # нативный KPS-тайл (клавиш/с): прошивка рисует сама,
-                      # хост только включает слот (бывш. «карусель» — гипотеза
-                      # «одиночный тайл» не подтвердилась, см. README.md)
+# The widget slots (confirmed by the GearLink mask in the live session of 2026-10-04:
+# the minimal clock+battery+CPU configuration gave the mask [0,1,1,1,0])
+SLOT_BANNER = 0       # the banner / music mode / a custom bitmap — leave alone
+SLOT_CLOCK = 1        # the clock: the content = a 0x63 push
+SLOT_BATTERY = 2      # the PC battery: the content = a push of 0x64 <percent>
+SLOT_MONITOR = 3      # the DOUBLE indicator (two tiles): the content = a 0x66 push
+SLOT_KPS = 4          # the native KPS tile (keys/s): the firmware draws it itself,
+                      # the host only enables the slot (formerly the "carousel" — the
+                      # "single tile" hypothesis was not confirmed, see README.md)
 
-# Виджеты = слоты, флаги --banner/--clock/--battery/--monitor/--kps.
-# Без флагов включён только баннер: он статичен и без демона не протухает,
-# в отличие от часов/батареи/метрик (см. shutdown_widgets).
-WIDGET_FLAGS = (       # имя argparse-флага → слот
+# The widgets = the slots, the flags --banner/--clock/--battery/--monitor/--kps.
+# Without flags only the banner is enabled: it is static and does not go stale
+# without the daemon, unlike the clock/battery/metrics (see shutdown_widgets).
+WIDGET_FLAGS = (       # an argparse flag name → slot
     ("banner", SLOT_BANNER),
     ("clock", SLOT_CLOCK),
     ("battery", SLOT_BATTERY),
     ("monitor", SLOT_MONITOR),
     ("kps", SLOT_KPS),
 )
-WIDGET_NAMES = {SLOT_BANNER: "баннер", SLOT_CLOCK: "часы",
-                SLOT_BATTERY: "батарея", SLOT_MONITOR: "монитор",
+WIDGET_NAMES = {SLOT_BANNER: "banner", SLOT_CLOCK: "clock",
+                SLOT_BATTERY: "battery", SLOT_MONITOR: "monitor",
                 SLOT_KPS: "KPS"}
-DEFAULT_SLOTS = (SLOT_BANNER,)   # набор при запуске без флагов
+DEFAULT_SLOTS = (SLOT_BANNER,)   # the set when started without flags
 
-CLOCK_SYNC_S = 60.0     # не используется для таймера: часы синхронизируются
-                        # на границе каждой минуты (см. run)
-HEARTBEAT_S = 10.0      # дисплей засыпает после ~30 тиков простоя: пушим
-                        # значения безусловно раз в 10 с, чтобы экран жил
-                        # (иначе NAK + мигание после каждого пробуждения)
-SWIPE_PAUSE_S = 5.0     # после ручного свайпа автолистание встаёт на паузу
+CLOCK_SYNC_S = 60.0     # not used for a timer: the clock is synced
+                        # at the boundary of every minute (see run)
+HEARTBEAT_S = 10.0      # the display falls asleep after ~30 idle ticks: we push
+                        # the values unconditionally every 10 s to keep the screen
+                        # alive (otherwise a NAK + blinking after every wake-up)
+SWIPE_PAUSE_S = 5.0     # after a manual swipe the auto-paging pauses
 WAKE_EVERY_S = 60.0
 STAT_EVERY_S = 30.0
 
-# Слайды слайдшоу (v0.3): сетка «источник.метрика» из конфига GearLink —
-# она же раскладка нибблов селектора 0x66 (PROTOCOL_OLED.md §10.5):
-# hi-ниббл = заголовок тайла {0=CPU, 1=GPU, 2=VRM, 3=DRAM, 4=CHA},
-# lo-ниббл = подпись значения {0=Usage, 1=Temp., 2=Freq., 3/4=Fan, 5=Volt}.
-# GearLink конфигурирует только cpu/gpu/ram × usage/temp/volt/freq —
-# VRM/CHA в прошивке есть, но в его сетке отсутствуют, не выставляем.
-SLIDE_SOURCES = {"cpu": 0x0, "gpu": 0x1, "ram": 0x3}      # «ram» = заголовок DRAM
+# The slideshow slides (v0.3): the "source.metric" grid from the GearLink config —
+# it is also the nibble layout of the 0x66 selector (PROTOCOL_OLED.md §10.5):
+# the hi-nibble = the tile header {0=CPU, 1=GPU, 2=VRM, 3=DRAM, 4=CHA},
+# the lo-nibble = the value label {0=Usage, 1=Temp., 2=Freq., 3/4=Fan, 5=Volt}.
+# GearLink only configures cpu/gpu/ram × usage/temp/volt/freq —
+# VRM/CHA exist in the firmware but are absent from its grid, we don't set them.
+SLIDE_SOURCES = {"cpu": 0x0, "gpu": 0x1, "ram": 0x3}      # "ram" = the DRAM header
 SLIDE_METRICS = {"usage": 0x0, "temp": 0x1, "freq": 0x2, "fan": 0x3, "volt": 0x5}
-SLIDE_ALIASES = {   # короткие имена первой редакции v0.3 → канонические
+SLIDE_ALIASES = {   # the short first-draft v0.3 names → the canonical ones
     "cpu": "cpu.usage", "gpu": "gpu.usage", "ram": "ram.usage",
     "usage": "cpu.usage", "temp": "cpu.temp", "freq": "cpu.freq",
     "fan": "cpu.fan", "volt": "cpu.volt",
 }
-DEFAULT_SLIDES = ("cpu.usage", "ram.usage", "cpu.freq")   # набор v0.2: CPU0 Usage /
+DEFAULT_SLIDES = ("cpu.usage", "ram.usage", "cpu.freq")   # the v0.2 set: CPU0 Usage /
                                                           # DRAM0 Usage (RAM) / CPU0 Freq
-DEFAULT_SLIDESHOW_S = 2.0                 # период, если --monitor-items задан без --slideshow
-AUTOSTART_TASK = "Azoth Companion"                # имя задачи планировщика (текущий пользователь)
-LOG_MAX_BYTES = 2 * 1024 * 1024           # ротация лог-файла: ~2 МБ
-LOG_BACKUPS = 2                           # итого 3 файла: azoth-companion.log, .1, .2
+DEFAULT_SLIDESHOW_S = 2.0                 # the period when --monitor-items is given without --slideshow
+AUTOSTART_TASK = "Azoth Companion"                # the scheduler task name (the current user)
+LOG_MAX_BYTES = 2 * 1024 * 1024           # the log file rotation: ~2 MB
+LOG_BACKUPS = 2                           # 3 files in total: azoth-companion.log, .1, .2
 
-# Graceful shutdown: обрабатываемые сигналы завершения ставят STOP, главный
-# цикл выходит, и перед закрытием устройства гасятся все виджеты, кроме
-# баннера (shutdown_widgets) — часы/батарея/метрики без демона показывают
-# протухшие данные. SIGINT не трогаем: Ctrl+C штатно приходит как
-# KeyboardInterrupt. На Windows SIGTERM снаружи почти всегда превращается в
-# TerminateProcess (taskkill /F, schtasks End) — это не перехватить; реальный
-# перехватываемый путь там SIGBREAK (Ctrl+Break) и CTRL_CLOSE консоли.
+# Graceful shutdown: the handled termination signals set STOP, the main
+# loop exits, and before closing the device all the widgets except the
+# banner are turned off (shutdown_widgets) — without the daemon the
+# clock/battery/metrics show stale data. SIGINT is not touched: Ctrl+C
+# arrives normally as KeyboardInterrupt. On Windows an external SIGTERM almost
+# always becomes TerminateProcess (taskkill /F, schtasks End) — that cannot be
+# intercepted; the really interceptable paths there are SIGBREAK (Ctrl+Break)
+# and the console CTRL_CLOSE.
 STOP = threading.Event()
-_stop_signal = None          # имя сигнала, которым остановили (для лога)
+_stop_signal = None          # the name of the signal we were stopped by (for the log)
 
 
 def _on_stop_signal(signum, _frame) -> None:
@@ -159,30 +160,30 @@ def _on_stop_signal(signum, _frame) -> None:
 
 
 def install_stop_handlers() -> None:
-    """Повесить _on_stop_signal на все сигналы завершения, доступные на
-    платформе; отсутствующие (SIGHUP/SIGQUIT на Windows) пропускаются."""
+    """Attach _on_stop_signal to every termination signal available on the
+    platform; the missing ones (SIGHUP/SIGQUIT on Windows) are skipped."""
     for name in ("SIGTERM", "SIGHUP", "SIGQUIT", "SIGBREAK"):
         sig = getattr(signal, name, None)
         if sig is None:
             continue
         try:
             signal.signal(sig, _on_stop_signal)
-        except (OSError, ValueError):    # не главный поток / платформа
+        except (OSError, ValueError):    # not the main thread / the platform
             pass
 
 
 def slide_sel(spec: str) -> int:
-    """Селектор тайла 0x66 из имени слайда «источник.метрика»."""
+    """The 0x66 tile selector from a "source.metric" slide name."""
     src, met = spec.split(".", 1)
     return (SLIDE_SOURCES[src] << 4) | SLIDE_METRICS[met]
 
-# XML-регистрация автозадачи без админ-прав (см. install_autostart):
-# LogonTrigger ограничен текущим пользователем — обычному пользователю это
-# разрешено, в отличие от `schtasks /sc onlogon` (триггер «любой вход»).
+# Registering the autostart task via XML without admin rights (see install_autostart):
+# the LogonTrigger is limited to the current user — a regular user is allowed
+# this, unlike `schtasks /sc onlogon` (the "any logon" trigger).
 AUTOSTART_XML = """<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>Azoth Companion — OLED-демон ROG Azoth 96 HE (замена GearLink): слайдшоу + OSD качельки.</Description>
+    <Description>Azoth Companion — the OLED daemon for the ROG Azoth 96 HE (a GearLink replacement): slideshow + volume rocker OSD.</Description>
     <URI>\\Azoth Companion</URI>
   </RegistrationInfo>
   <Triggers>
@@ -226,23 +227,23 @@ AUTOSTART_XML = """<?xml version="1.0" encoding="UTF-16"?>
 </Task>
 """
 
-_FILE_LOG = None      # дубль лога в файл (Logger, создаёт setup_log_file)
+_FILE_LOG = None      # the file mirror of the log (a Logger, created by setup_log_file)
 
 
 def log(msg: str) -> None:
     t = time.time()
     line = (time.strftime("[%H:%M:%S.", time.localtime(t))
             + "%03d] " % (int(t * 1000) % 1000) + msg)
-    print(line, flush=True)   # под pythonw stdout=None — print молча пропустит
+    print(line, flush=True)   # under pythonw stdout=None — print silently skips
     if _FILE_LOG is not None:
         _FILE_LOG.info(line)
 
 
 def setup_log_file(path: str) -> None:
-    """Дубль лога в файл: те же строки, что в stdout (не перенаправление!),
-    UTF-8, ротация по размеру (стандартный RotatingFileHandler). Пустая строка
-    = флаг --log-file без значения: logs/azoth-companion.log рядом с azoth-companion.py
-    (каталог создаётся). Относительный PATH считается от CWD."""
+    """A file mirror of the log: the same lines as stdout (not a redirection!),
+    UTF-8, size rotation (the standard RotatingFileHandler). An empty string
+    = the --log-file flag without a value: logs/azoth-companion.log next to azoth-companion.py
+    (the directory is created). A relative PATH is resolved from the CWD."""
     global _FILE_LOG
     if not path:
         path = str(Path(__file__).resolve().parent / "logs" / "azoth-companion.log")
@@ -254,7 +255,7 @@ def setup_log_file(path: str) -> None:
         handler = RotatingFileHandler(str(p), maxBytes=LOG_MAX_BYTES,
                                       backupCount=LOG_BACKUPS, encoding="utf-8")
     except OSError as e:
-        print("лог-файл %s недоступен (%s) — пишу только в stdout" % (p, e), flush=True)
+        print("the log file %s is unavailable (%s) — writing to stdout only" % (p, e), flush=True)
         return
     handler.setFormatter(logging.Formatter("%(message)s"))
     lg = logging.getLogger("azoth-companion.file")
@@ -262,7 +263,7 @@ def setup_log_file(path: str) -> None:
     lg.propagate = False
     lg.addHandler(handler)
     _FILE_LOG = lg
-    log("лог-файл: %s (ротация %.0f МБ × %d файла)"
+    log("log file: %s (rotation %.0f MB × %d files)"
         % (p, LOG_MAX_BYTES / 1048576, LOG_BACKUPS + 1))
 
 
@@ -273,8 +274,8 @@ def pair_label(sel: int, digit: int) -> str:
 
 
 class HostSensors:
-    """Метрики хоста: psutil обязателен по возможности; WMI (LibreHardwareMonitor/
-    OpenHardwareMonitor) — для сенсоров temperature/voltage/clock/load CPU/GPU/RAM."""
+    """The host metrics: psutil is required when possible; WMI (LibreHardwareMonitor/
+    OpenHardwareMonitor) — for the temperature/voltage/clock/load sensors of CPU/GPU/RAM."""
 
     LHM_NS = ("root\\LibreHardwareMonitor", "root\\OpenHardwareMonitor")
 
@@ -282,15 +283,15 @@ class HostSensors:
         try:
             import psutil
             self._p = psutil
-            psutil.cpu_percent(interval=None)  # prime: следующий вызов даст дельту
+            psutil.cpu_percent(interval=None)  # prime: the next call gives the delta
         except ImportError:
             self._p = None
         self._wmi = None
-        self._wmi_dead = False    # подсистема LHM в целом (import/namespace)
-        self._dead = set()        # «сенсор не найден» — предупреждение один раз на ключ
-        self._mm = None           # последний JSON macmon (macOS)
+        self._wmi_dead = False    # the LHM subsystem as a whole (import/namespace)
+        self._dead = set()        # "sensor not found" — one warning per key
+        self._mm = None           # the last macmon JSON (macOS)
         self._mm_t = 0.0
-        self._mm_dead = False     # macmon нет в PATH / не запускается
+        self._mm_dead = False     # macmon is not in PATH / does not run
 
     def cpu_load(self) -> int | None:
         return None if self._p is None else int(round(self._p.cpu_percent(interval=None)))
@@ -304,9 +305,9 @@ class HostSensors:
         return self._p.sensors_battery()
 
     def _lhm_connect(self, what: str):
-        """self._wmi или None; подключение ленивое, отказ — одно предупреждение."""
+        """self._wmi or None; the connection is lazy, a failure — a single warning."""
         if sys.platform != "win32":
-            self._wmi_dead = True     # LHM/WMI только Windows: на macOS — macmon
+            self._wmi_dead = True     # LHM/WMI is Windows-only: on macOS — macmon
             return None
         if self._wmi is not None:
             return self._wmi
@@ -316,8 +317,8 @@ class HostSensors:
             import wmi
         except ImportError:
             self._wmi_dead = True
-            log("WMI-сенсоры недоступны: pip install wmi + запустить "
-                "LibreHardwareMonitor.exe (%s не будет)" % what)
+            log("WMI sensors unavailable: pip install wmi + run "
+                "LibreHardwareMonitor.exe (%s will be missing)" % what)
             return None
         for ns in self.LHM_NS:
             try:
@@ -326,18 +327,18 @@ class HostSensors:
             except Exception:
                 continue
         self._wmi_dead = True
-        log("WMI-namespace LibreHardwareMonitor не найден — запусти "
-            "LibreHardwareMonitor.exe (%s не будет)" % what)
+        log("the LibreHardwareMonitor WMI namespace not found — run "
+            "LibreHardwareMonitor.exe (%s will be missing)" % what)
         return None
 
     def _lhm_pick(self, key: str, stype: str, patterns: tuple[str, ...],
                   what: str, fallback_any: bool = False,
                   scale: float = 1.0) -> int | None:
-        """Первый датчик LibreHardwareMonitor типа `stype`, чьё имя (в нижнем
-        регистре) содержит хотя бы один из `patterns` (порядок = приоритет
-        имён). Подсистема/датчик недоступны → None, предупреждение по одному
-        на `key`. fallback_any — если имён из patterns нет совсем, взять
-        первый попавшийся датчик типа (некоторые платы зовут Vcore «Voltage #N»)."""
+        """The first LibreHardwareMonitor sensor of type `stype` whose name (in
+        lower case) contains at least one of `patterns` (the order = the name
+        priority). Subsystem/sensor unavailable → None, one warning per `key`.
+        fallback_any — if none of the pattern names exist at all, take the
+        first sensor of the type (some boards call Vcore "Voltage #N")."""
         if key in self._dead:
             return None
         w = self._lhm_connect(what)
@@ -349,7 +350,7 @@ class HostSensors:
                            % stype)
         except Exception:
             self._dead.add(key)
-            log("запрос сенсора «%s» не удался — значение пропускается" % what)
+            log("the \"%s\" sensor query failed — the value is skipped" % what)
             return None
         vals = [(str(r.Name or "").lower(), float(r.Value))
                 for r in rows if r.Value is not None]
@@ -360,16 +361,17 @@ class HostSensors:
         if fallback_any and vals:
             return int(round(vals[0][1] * scale))
         self._dead.add(key)
-        log("сенсор «%s» не найден (LibreHardwareMonitor: датчик Type='%s' с "
-            "именем на «%s») — слайд будет пропускаться" % (what, stype, patterns[0]))
+        log("the sensor \"%s\" not found (LibreHardwareMonitor: a Type='%s' sensor "
+            "with a name containing \"%s\") — the slide will be skipped" % (what, stype, patterns[0]))
         return None
 
     def _macmon(self) -> dict | None:
-        """macOS: JSON macmon (brew install macmon, sudoless IOReport) —
-        температуры CPU/GPU, реальная частота кластеров, gpu-usage. Кэш 1.5 с:
-        слайды опрашиваются раз в ~2 с — процесс не спавнится чаще. Нет в
-        PATH / не запустился → None (слайды пропустятся штатно) + одно
-        предупреждение. На других ОС — None (там LHM/psutil)."""
+        """macOS: the macmon JSON (brew install macmon, sudoless IOReport) —
+        the CPU/GPU temperatures, the real cluster frequency, the gpu usage.
+        A 1.5 s cache: the slides are polled every ~2 s — the process is not
+        spawned more often. Not in PATH / did not run → None (the slides are
+        skipped normally) + a single warning. On other OSes — None (LHM/psutil
+        there)."""
         if sys.platform != "darwin":
             return None
         if self._mm is not None and time.monotonic() - self._mm_t < 1.5:
@@ -383,14 +385,14 @@ class HostSensors:
             self._mm = json.loads(line)
         except Exception:
             self._mm_dead = True
-            log("macmon недоступен — слайды temp/freq/gpu на macOS пропускаться "
-                "будут (brew install macmon)")
+            log("macmon unavailable — the temp/freq/gpu slides on macOS will be "
+                "skipped (brew install macmon)")
             return None
         self._mm_t = time.monotonic()
         return self._mm
 
     def _macmon_val(self, path: list, scale: float = 1.0) -> int | None:
-        """Число из JSON macmon по пути ключей или None."""
+        """A number from the macmon JSON by the key path, or None."""
         m = self._macmon()
         if m is None:
             return None
@@ -411,33 +413,33 @@ class HostSensors:
             pass
         return None
 
-    # --- канонические поставщики значений слайдов ---
+    # --- the canonical slide value providers ---
     def cpu_temp(self) -> int | None:
-        """°C пакета CPU: macOS — macmon (cpu_temp_avg); Windows — LHM
-        Temperature («CPU Package»); ACPI-термозоны не считаем — на
-        тестовой машине их нет (проверено)."""
+        """The CPU package °C: macOS — macmon (cpu_temp_avg); Windows — the LHM
+        Temperature ("CPU Package"); ACPI thermal zones are not counted — the
+        test machine has none (verified)."""
         t = self._macmon_val(["temp", "cpu_temp_avg"])
         if t is not None:
             return t
         return self._lhm_pick("cpu.temp", "Temperature",
                               ("cpu package", "package", "cpu"),
-                              "температура CPU (Package)")
+                              "the CPU temperature (Package)")
 
     def cpu_volt(self) -> int | None:
-        """Напряжение CPU в милливольтах: LHM Voltage («Vcore»/«CPU»).
-        Volt = мВ — подтверждено захватом 12 (PROTOCOL_OLED.md §10.5)."""
+        """The CPU voltage in millivolts: the LHM Voltage ("Vcore"/"CPU").
+        Volt = mV — confirmed by capture 12 (PROTOCOL_OLED.md §10.5)."""
         return self._lhm_pick("cpu.volt", "Voltage", ("vcore", "cpu"),
-                              "напряжение CPU (Vcore)", fallback_any=True,
+                              "the CPU voltage (Vcore)", fallback_any=True,
                               scale=1000)
 
     def cpu_freq_mhz(self) -> int:
-        """МГц текущей частоты CPU: macOS — macmon (pcpu_freq_mhz, реальные
-        кластеры P-ядер); иначе psutil (на AS вернёт базовую). При ошибке
-        0 (никогда не None)."""
+        """The current CPU frequency in MHz: macOS — macmon (pcpu_freq_mhz, the
+        real P-cluster frequencies); otherwise psutil (on AS it returns the
+        base one). On error 0 (never None)."""
         v = self._macmon_val(["pcpu_freq_mhz"])
         if v:
             return v
-        if self._p is None:                    # psutil нет (macmon тоже не помог)
+        if self._p is None:                    # no psutil (macmon did not help either)
             return 0
         try:
             f = self._p.cpu_freq()
@@ -446,159 +448,163 @@ class HostSensors:
             return 0
 
     def gpu_usage(self) -> int | None:
-        """% загрузки GPU: macOS — macmon (gpu_active_ratio); Windows — LHM
-        Load («GPU Core», иначе любой GPU-датчик)."""
+        """The GPU load %: macOS — macmon (gpu_active_ratio); Windows — the LHM
+        Load ("GPU Core", otherwise any GPU sensor)."""
         u = self._macmon_val(["gpu_active_ratio"], scale=100)
         if u is not None:
             return u
         return self._lhm_pick("gpu.usage", "Load", ("gpu core", "gpu"),
-                              "загрузка GPU")
+                              "the GPU load")
 
     def gpu_temp(self) -> int | None:
-        """°C GPU: macOS — macmon (gpu_temp_avg); Windows — LHM Temperature
-        («GPU Core», «Hot Spot», любой GPU)."""
+        """The GPU °C: macOS — macmon (gpu_temp_avg); Windows — the LHM
+        Temperature ("GPU Core", "Hot Spot", any GPU)."""
         t = self._macmon_val(["temp", "gpu_temp_avg"])
         if t is not None:
             return t
         return self._lhm_pick("gpu.temp", "Temperature",
-                              ("gpu core", "hot spot", "gpu"), "температура GPU")
+                              ("gpu core", "hot spot", "gpu"), "the GPU temperature")
 
     def gpu_freq(self) -> int | None:
-        """МГц GPU: macOS — macmon (gpu_freq_mhz); Windows — LHM Clock
-        («GPU Core»)."""
+        """The GPU MHz: macOS — macmon (gpu_freq_mhz); Windows — the LHM Clock
+        ("GPU Core")."""
         f = self._macmon_val(["gpu_freq_mhz"])
         if f is not None:
             return f
         return self._lhm_pick("gpu.freq", "Clock", ("gpu core", "gpu"),
-                              "частота GPU")
+                              "the GPU frequency")
 
     def fan_rpm(self) -> int | None:
-        """Об/мин основного вентилятора (§10.3.1: тайл Fan, гейдж 1000/3500):
+        """The main fan RPM (§10.3.1: the Fan tile, the 1000/3500 gauge):
         macOS — macmon (fans[0].rpm); Linux — psutil.sensors_fans; Windows —
-        LHM Type='Fan' («CPU», иначе любой). 0 RPM (тихий ход) — валидное
-        значение; fanless/нет датчика → None, слайд скипнется."""
+        the LHM Type='Fan' ("CPU", otherwise any). 0 RPM (silent operation)
+        is a valid value; fanless/no sensor → None, the slide will be
+        skipped."""
         r = self._macmon_val(["fans", 0, "rpm"])
         if r is not None:
             return r
         if sys.platform == "darwin":
-            return None             # macmon есть, вентиляторов нет (Air)
+            return None             # macmon present, no fans (an Air)
         if self._p is not None and hasattr(self._p, "sensors_fans"):
-            with suppress(Exception):      # нет датчиков/платформы — скип, не повод логировать
+            with suppress(Exception):      # no sensors/platform — a skip, not worth logging
                 for fans in self._p.sensors_fans().values():
                     if fans:
                         return int(fans[0].current)
         return self._lhm_pick("cpu.fan", "Fan", ("cpu", "fan"),
-                              "об/мин вентилятора CPU", fallback_any=True)
+                              "the CPU fan RPM", fallback_any=True)
 
     def gpu_volt(self) -> int | None:
-        """мВ GPU: LHM Voltage («GPU Core»), В → мВ."""
+        """The GPU mV: the LHM Voltage ("GPU Core"), V → mV."""
         return self._lhm_pick("gpu.volt", "Voltage", ("gpu core", "gpu"),
-                              "напряжение GPU", scale=1000)
+                              "the GPU voltage", scale=1000)
 
     def ram_temp(self) -> int | None:
-        """°C памяти: LHM Temperature (SODIMM/DIMM/Memory) — платформозависимо."""
+        """The memory °C: the LHM Temperature (SODIMM/DIMM/Memory) — platform-dependent."""
         return self._lhm_pick("ram.temp", "Temperature",
                               ("sodimm", "dimm", "memory", "ram"),
-                              "температура RAM (DIMM)")
+                              "the RAM temperature (DIMM)")
 
     def ram_freq(self) -> int | None:
-        """МГц памяти: LHM Clock («Memory Clock») — платформозависимо."""
+        """The memory MHz: the LHM Clock ("Memory Clock") — platform-dependent."""
         return self._lhm_pick("ram.freq", "Clock",
-                              ("memory clock", "memory", "dram"), "частота RAM")
+                              ("memory clock", "memory", "dram"), "the RAM frequency")
 
     def ram_volt(self) -> int | None:
-        """мВ памяти: LHM Voltage (DIMM/DRAM/VDDCR) — платформозависимо."""
+        """The memory mV: the LHM Voltage (DIMM/DRAM/VDDCR) — platform-dependent."""
         return self._lhm_pick("ram.volt", "Voltage",
                               ("dimm", "dram", "vddr", "memory"),
-                              "напряжение RAM (DIMM)")
+                              "the RAM voltage (DIMM)")
 
 
 def sync_clock(kbd: M901) -> None:
     t = dt.datetime.now()
     ok = kbd.set_clock(t.year, t.month, t.day, t.hour, t.minute)
-    log("время %s → 0x63 %s" % (t.strftime("%Y-%m-%d %H:%M"),
-                                "ok" if ok else "БЕЗ ОТВЕТА"))
+    log("time %s → 0x63 %s" % (t.strftime("%Y-%m-%d %H:%M"),
+                                "ok" if ok else "NO REPLY"))
 
 
 def enabled_slots(args) -> list[int]:
-    """Слоты-виджеты по флагам --banner/--clock/--battery/--monitor/--kps;
-    без флагов — только баннер (DEFAULT_SLOTS). Пустым набор не бывает:
-    OLED требует хотя бы один включённый виджет."""
+    """The widget slots per the --banner/--clock/--battery/--monitor/--kps flags;
+    without flags — the banner only (DEFAULT_SLOTS). The set is never empty:
+    the OLED requires at least one enabled widget."""
     slots = [slot for flag, slot in WIDGET_FLAGS if getattr(args, flag)]
     return slots or list(DEFAULT_SLOTS)
 
 
 def apply_layout(kbd: M901, args) -> None:
-    """Стартовая пачка в точности как у GearLink (захват 18):
-    65 FF → при необходимости 6A-маска + 68 + 50 55 → пуш значений.
-    Набор виджетов = флаги (--banner/--clock/…): включается ровно он,
-    слоты вне набора гасятся — демон единственный хозяин раскладки.
-    ПОРЯДОК ВАЖЕН: прошивка валидирует каждую 6A против ТЕКУЩЕЙ маски
-    («хотя бы один виджет должен остаться»), поэтому включения идут
-    раньше выключений — иначе banner-off при наборе без баннера молча
-    игнорируется (ACK есть, бит не меняется; проверено 2026-10-05)."""
-    kbd.wake_display(0xFF)               # GearLink-style wake (не mode 0!)
+    """The startup batch exactly like GearLink's (capture 18):
+    65 FF → if needed the 6A mask + 68 + 50 55 → a push of the values.
+    The widget set = the flags (--banner/--clock/…): exactly it gets enabled,
+    the slots outside the set are turned off — the daemon is the single owner
+    of the layout. THE ORDER MATTERS: the firmware validates every 6A against
+    the CURRENT mask ("at least one widget must remain"), so the enables go
+    before the disables — otherwise banner-off in a set without a banner is
+    silently ignored (there is an ACK, the bit does not change; verified
+    2026-10-05)."""
+    kbd.wake_display(0xFF)               # a GearLink-style wake (not mode 0!)
     enabled = enabled_slots(args)
     start = args.start if args.start is not None else (
         SLOT_MONITOR if SLOT_MONITOR in enabled else enabled[0])
     mask = kbd.get_status_flags()
     changed = False
-    for slot in enabled:                 # сначала включения
+    for slot in enabled:                 # the enables first
         if mask is None or not mask[slot]:
             if not kbd.set_widget(slot, True):           # 6A 00 <slot> 01
-                log("внимание: слот %d не подтвердил включение" % slot)
+                log("warning: slot %d did not acknowledge enabling" % slot)
             changed = True
-    for slot in range(5):                # …затем выключения лишних
+    for slot in range(5):                # …then disabling the extras
         if slot in enabled or not (mask is None or mask[slot]):
             continue
         if not kbd.set_widget(slot, False):              # 6A 00 <slot> 00
-            log("внимание: слот %d не подтвердил выключение" % slot)
+            log("warning: slot %d did not acknowledge disabling" % slot)
         changed = True
     if changed:
-        log("маска виджетов: %s → набор %s" % (mask, enabled))
+        log("widget mask: %s → set %s" % (mask, enabled))
     if args.brightness is not None:
         kbd.set_brightness(args.brightness)          # 68 00 00 00 <v>
         changed = True
     if changed:
-        kbd.commit()                    # 50 55 — только после смены маски/яркости
+        kbd.commit()                    # 50 55 — only after a mask/brightness change
     kbd.select_slot(start)              # 6A 01 <slot>
     kbd.commit()
-    log("раскладка: %s; старт=слот %d (%s), маска=%s"
+    log("layout: %s; start=slot %d (%s), mask=%s"
         % ("+".join(WIDGET_NAMES[s] for s in enabled), start,
            WIDGET_NAMES[start], kbd.get_status_flags()))
 
 
 def demo_value(half: float = 5.5, phase: float = 0.0) -> int:
-    """Треугольник 0→100→0, полупериод half с — тестовый «бегущий» сенсор."""
+    """A 0→100→0 triangle, a half-period of half s — a test "running" sensor."""
     ph = ((time.monotonic() + phase) % (2 * half)) / half   # 0..2
     return int(round(100 * (ph if ph <= 1.0 else 2.0 - ph)))
 
 
 def resolve_pairs(args, sensors: HostSensors) -> list[tuple[int, int, int]]:
-    """Пары 0x66 по режиму --metrics. Ручные значения (--cpu и т.п.) приоритетны."""
+    """The 0x66 pairs for the --metrics mode. The manual values (--cpu etc.)
+    take priority."""
     if args.demo:
         pairs = [(0x00, 0, demo_value())]
         if args.metrics == "cpu-ram" or (args.metrics == "cpu-temp"
                                          and args.temp is None):
-            # Второй тайл — RAM как «DRAM0 Usage» (живой тест гипотезы):
-            # нейтральная пустая пара выглядит как «CPU Usage 0» на слоте 3.
+            # The second tile — RAM as "DRAM0 Usage" (the live test of the
+            # hypothesis): a neutral empty pair looks like "CPU Usage 0" on
+            # slot 3.
             pairs.append((0x30, 0, demo_value(half=7.0, phase=2.5)))
         elif args.metrics == "cpu-temp":
             pairs.append((0x01, 0, args.temp))
         return pairs
     cpu = args.cpu if args.cpu is not None else sensors.cpu_load()
     if cpu is None:
-        raise SystemExit("нет данных CPU: pip install psutil или задай --cpu")
+        raise SystemExit("no CPU data: pip install psutil or set --cpu")
     if args.metrics == "cpu-temp":
         temp = args.temp if args.temp is not None else sensors.cpu_temp()
         if temp is not None:
             return [(0x00, 0, cpu), (0x01, 0, temp)]
-        return [(0x00, 0, cpu)]          # fallback: одинарный Usage (как GearLink)
+        return [(0x00, 0, cpu)]          # a fallback: a single Usage (like GearLink)
     if args.metrics == "cpu-ram":
         ram = args.ram_val if args.ram_val is not None else sensors.ram_load()
         if ram is None:
-            raise SystemExit("нет данных RAM: pip install psutil или задай --ram-val")
-        return [(0x00, 0, cpu), (0x30, 0, ram)]      # «DRAM0 Usage» — гипотеза
+            raise SystemExit("no RAM data: pip install psutil or set --ram-val")
+        return [(0x00, 0, cpu), (0x30, 0, ram)]      # "DRAM0 Usage" — the hypothesis
     return [(0x00, 0, cpu)]
 
 
@@ -618,34 +624,36 @@ def pairs_differ(a, b) -> bool:
 
 
 def open_events(kbd: M901):
-    """Канал событий iface2 (0x93 смена слота, 0x95/0x96 состояние виджета)."""
+    """The iface2 event channel (0x93 a slot change, 0x95/0x96 the widget state)."""
     try:
         return kbd.open_consumer()
     except Exception as e:
-        log("канал событий iface2 недоступен (%s) — продолжаю без него" % e)
+        log("the iface2 event channel unavailable (%s) — continuing without it" % e)
         return None
 
 
 def drain_events(cons) -> None:
     for _ in range(8):
-        # timeout_ms=1, не 0: на Windows-hidapi 0 = бесконечное блокирование
+        # timeout_ms=1, not 0: on Windows-hidapi 0 = infinite blocking
         data = cons.read(64, timeout_ms=1)
         if not data:
             return
         if data[0] == 0x03 and len(data) >= 5 and data[1] in (0x93, 0x95, 0x96):
-            name = {0x93: "смена слота", 0x95: "статус виджета",
-                    0x96: "лок. изменение"}.get(data[1], "?")
-            log("событие 0x%02X %s: payload=%s"
+            name = {0x93: "slot change", 0x95: "widget status",
+                    0x96: "local change"}.get(data[1], "?")
+            log("event 0x%02X %s: payload=%s"
                 % (data[1], name, bytes(data[4:9]).hex()))
 
 
 def robust_push(kbd: M901, fn, *args) -> bool:
-    """Пуш с самовосстановлением, по режиму отказа:
-    • настоящий NAK (`FF AA`) + экран ЯВНО спит (`0x23/02 == 0`) → будим
-      `65 FF` + `69` и ретраим (короткий чёрный кадр — только по делу);
-    • NAK при включённом экране (OSD качельки/жест монополизировали тракт)
-      или таймаут/тишина → тихая ретрия через 0.3 с, без будильника —
-      иначе первый burst качельки мигал всю серию (живой тест 2026-10-05)."""
+    """A self-healing push, by the failure mode:
+    • a real NAK (`FF AA`) + the screen EXPLICITLY asleep (`0x23/02 == 0`) →
+      wake with `65 FF` + `69` and retry (a short black frame — only when
+      needed);
+    • a NAK with the screen on (the rocker OSD/a gesture monopolized the
+      path) or a timeout/silence → a quiet retry after 0.3 s, no wake-up —
+      otherwise the first rocker burst blinked the whole series (live test
+      2026-10-05)."""
     if fn(*args):
         return True
     if getattr(kbd, "last_nak", False) and not kbd.screen_is_on():
@@ -654,51 +662,54 @@ def robust_push(kbd: M901, fn, *args) -> bool:
         time.sleep(0.2)
         ok = fn(*args)
         if ok:
-            log("экран спал — разбудил и повторил")
+            log("the screen was asleep — woke it and retried")
         return ok
     time.sleep(0.3)
     return fn(*args)
 
 
 def open_ffc0(kbd: M901):
-    """Канал 0xFFC0 (Col03 iface2): зеркало событий 03 93/95/96 + тач 03 71.
-    Каждый `03 96` = принятый вертикальный свайп (эмпирика 2026-10-04)."""
+    """The 0xFFC0 channel (Col03 of iface2): the 03 93/95/96 event mirror +
+    the 03 71 touch. Each `03 96` = an accepted vertical swipe (empirical
+    2026-10-04)."""
     try:
         return kbd.open_ffc0()
     except Exception as e:
-        log("канал 0xFFC0 недоступен (%s) — свайпы листать не будут" % e)
+        log("the 0xFFC0 channel unavailable (%s) — the swipes will not page" % e)
         return None
 
 
 def start_ffc0_reader(kbd, on_tick=None):
-    """Фоновый поток: непрерывно читает 0xFFC0 (блокирующее чтение) и кладёт
-    фреймы 03-xx в очередь. Спайс-дрен из главного цикла репорты ТЕРЯЛ:
-    Windows-HID не копит входные репорты без pending read, а с ним —
-    доставляет каждому открытому хендлу. Тики качельки (03 72 01/04)
-    дублируются в `on_tick(up)` немедленно — OSD не ждёт главного цикла."""
+    """A background thread: continuously reads 0xFFC0 (a blocking read) and
+    puts the 03-xx frames into a queue. A drain from the main loop LOST the
+    reports: Windows-HID does not accumulate input reports without a pending
+    read, and with one it delivers to every open handle. The rocker ticks
+    (03 72 01/04) are forwarded to `on_tick(up)` immediately — the OSD does
+    not wait for the main loop."""
     try:
         dev = kbd.open_ffc0()
     except Exception as e:
-        log("канал 0xFFC0 недоступен (%s) — свайпы листать не будут" % e)
+        log("the 0xFFC0 channel unavailable (%s) — the swipes will not page" % e)
         return None
     q = queue.Queue()
 
     def reader():
         while True:
             try:
-                # ЯВНЫЙ таймаут: read(64) без него = timeout_ms=0 =
-                # НЕблокирующее чтение (ловушка cython-hidapi, см. recv)
+                # an EXPLICIT timeout: read(64) without it = timeout_ms=0 =
+                # a NON-blocking read (the cython-hidapi trap, see recv)
                 data = dev.read(64, timeout_ms=1000)
             except Exception:
                 break
             if data:
                 d = bytes(data)
                 q.put(d)
-                # Тики объёма (01 = vol+, 04 = vol−) открывают окно OSD; пресс
-                # 02 окно НЕ открывает — уходит в воркер только как метка
-                # «unmute пришёл от качельки» (нажатие = mute-тоггл; пуш окна
-                # по прессу давал OSD уровня на мьюте — регрессия 2026-10-05).
-                # Релиз 00 не нужен никому.
+                # The volume ticks (01 = vol+, 04 = vol−) open the OSD window;
+                # a press of 02 does NOT open the window — it goes to the
+                # worker only as a mark that "the unmute came from the rocker"
+                # (a press = the mute toggle; pushing the window on press gave
+                # a level OSD while muted — a regression of 2026-10-05).
+                # The release 00 is not needed by anyone.
                 if on_tick and len(d) >= 3 and d[0] == 0x03 and d[1] == 0x72 \
                         and d[2] in (0x01, 0x02, 0x04):
                     on_tick(d[2])
@@ -708,8 +719,8 @@ def start_ffc0_reader(kbd, on_tick=None):
 
 
 def poll_ffc0(ffc0, dump: bool = False) -> tuple[int, int]:
-    """Выгрести накопленные фреймы из очереди. Возвращает (свайпы 03 96,
-    тики качельки 03 72 01/04)."""
+    """Drain the accumulated frames from the queue. Returns (the 03 96 swipes,
+    the 03 72 01/04 rocker ticks)."""
     swipes = ticks = 0
     while True:
         try:
@@ -722,23 +733,23 @@ def poll_ffc0(ffc0, dump: bool = False) -> tuple[int, int]:
             if d[1] == 0x96:
                 swipes += 1
             elif d[1] == 0x72 and d[2] in (0x01, 0x04):
-                # качелька: 01 = vol+, 04 = vol− (00 = отпускание, не тик)
+                # the rocker: 01 = vol+, 04 = vol− (00 = a release, not a tick)
                 ticks += 1
             elif d[1] == 0x94:
-                # в захвате 20 GearLink такие видели дважды; если появятся —
-                # хотим об этом знать (возможный «сосед» свайпа)
-                log("событие 0394: %s" % d[:10].hex(" "))
+                # in capture 20 GearLink saw these twice; if they appear —
+                # we want to know about it (a possible swipe "neighbor")
+                log("event 0394: %s" % d[:10].hex(" "))
     return swipes, ticks
 
 
 def parse_monitor_items(spec: str | None) -> list[str]:
-    """--monitor-items «cpu.usage,gpu.temp,…» → проверенный список канонических
-    имён. Формат «источник.метрика» — сетка конфига GearLink
-    (PROTOCOL_OLED.md §10.5): источники cpu/gpu/ram, метрики usage/temp/freq/
-    volt. Короткие имена первой редакции (cpu, ram, temp, …) принимаются как
-    алиасы. Неизвестное имя и пустой список — ошибка запуска; дубликаты
-    схлопываются, порядок сохраняется; None (флаг не задан) → набор по
-    умолчанию."""
+    """--monitor-items "cpu.usage,gpu.temp,…" → a validated list of canonical
+    names. The "source.metric" format — the GearLink config grid
+    (PROTOCOL_OLED.md §10.5): the sources cpu/gpu/ram, the metrics
+    usage/temp/freq/volt. The short first-draft names (cpu, ram, temp, …)
+    are accepted as aliases. An unknown name and an empty list are a startup
+    error; duplicates collapse, the order is preserved; None (the flag not
+    given) → the default set."""
     if spec is None:
         return list(DEFAULT_SLIDES)
     names, seen = [], set()
@@ -751,27 +762,28 @@ def parse_monitor_items(spec: str | None) -> list[str]:
         if (len(parts) != 2 or parts[0] not in SLIDE_SOURCES
                 or parts[1] not in SLIDE_METRICS):
             raise SystemExit(
-                "--monitor-items: неизвестное имя «%s»; формат "
-                "«источник.метрика»: источники %s, метрики %s; короткие имена "
-                "(%s) тоже принимаются"
+                "--monitor-items: unknown name \"%s\"; the format is "
+                "\"source.metric\": the sources %s, the metrics %s; the short "
+                "names (%s) are accepted too"
                 % (raw.strip(), "/".join(SLIDE_SOURCES),
                    "/".join(SLIDE_METRICS), ", ".join(SLIDE_ALIASES)))
         if token not in seen:
             seen.add(token)
             names.append(token)
     if not names:
-        raise SystemExit("--monitor-items: пустой список — укажи хотя бы одно "
-                         "имя, например cpu.usage,ram.usage,gpu.temp")
+        raise SystemExit("--monitor-items: an empty list — give at least one "
+                         "name, e.g. cpu.usage,ram.usage,gpu.temp")
     return names
 
 
 def slide_value(spec: str, args, sensors: HostSensors) -> int | None:
-    """Значение слайда «источник.метрика» в единицах тайла 0x66
-    (Usage=%, Temp=°C, Freq=МГц, Fan=об/мин, Volt=мВ — PROTOCOL_OLED.md §10.5);
-    None = слайд пропускается (сенсор недоступен — предупреждение одно,
-    см. HostSensors._lhm_pick). Ручные --cpu/--temp/--ram-val приоритетны.
-    cpu.usage/ram.usage без psutil — останов; всё остальное сенсорное —
-    LibreHardwareMonitor, «ram» на экране = заголовок «DRAM0»."""
+    """The value of a "source.metric" slide in the 0x66 tile units
+    (Usage=%, Temp=°C, Freq=MHz, Fan=RPM, Volt=mV — PROTOCOL_OLED.md §10.5);
+    None = the slide is skipped (the sensor unavailable — a single warning,
+    see HostSensors._lhm_pick). The manual --cpu/--temp/--ram-val take
+    priority. cpu.usage/ram.usage without psutil — a stop; everything else
+    sensor-based — LibreHardwareMonitor, "ram" on screen = the "DRAM0"
+    header."""
     src, met = spec.split(".", 1)
     if met == "usage":
         if src == "gpu":
@@ -779,14 +791,14 @@ def slide_value(spec: str, args, sensors: HostSensors) -> int | None:
         if src == "ram":
             v = args.ram_val if args.ram_val is not None else sensors.ram_load()
             if v is None:
-                log("нет данных RAM (слайд ram.usage): pip install psutil "
-                    "или задай --ram-val")
+                log("no RAM data (the ram.usage slide): pip install psutil "
+                    "or set --ram-val")
                 raise SystemExit(1)
             return v
         v = args.cpu if args.cpu is not None else sensors.cpu_load()
         if v is None:
-            log("нет данных CPU (слайд cpu.usage): pip install psutil "
-                "или задай --cpu")
+            log("no CPU data (the cpu.usage slide): pip install psutil "
+                "or set --cpu")
             raise SystemExit(1)
         return v
     if src == "cpu":
@@ -808,27 +820,27 @@ def _positive_float(text: str) -> float:
     try:
         v = float(text)
     except ValueError:
-        raise argparse.ArgumentTypeError("не число: %r" % text)
+        raise argparse.ArgumentTypeError("not a number: %r" % text)
     if v <= 0:
         raise argparse.ArgumentTypeError(
-            "нужно положительное число, получено %s" % text)
+            "a positive number is required, got %s" % text)
     return v
 
 
 class WindowsVolume:
-    """Мастер-громкость вывода Windows через IAudioEndpointVolume
-    (чистый ctypes, без зависимостей). Качелька шлёт consumer-события —
-    громкость меняет сама ОС; нам остаётся только ПРОЧИТАТЬ новое
-    значение и отзеркалить его на OSD клавиатуры (`51 0C`, как GearLink,
+    """The Windows master output volume via IAudioEndpointVolume
+    (pure ctypes, no dependencies). The rocker sends consumer events —
+    the OS changes the volume itself; all we have to do is READ the new
+    value and mirror it onto the keyboard OSD (`51 0C`, like GearLink,
     PROTOCOL_VOLUME.md §0-§1)."""
 
     def __init__(self):
         self._ep = None
         self._dead = False
-        self._cache = None      # значение из фонового поллера
+        self._cache = None      # the value from the background poller
         self._cache_t = 0.0
-        self._muted = None      # None = ещё не знаем
-        self.on_unmute: Callable[[], None] | None = None   # колбэк «mute снят» (пуш уровня на OSD)
+        self._muted = None      # None = not known yet
+        self.on_unmute: Callable[[], None] | None = None   # the "mute cleared" callback (a level push to the OSD)
         self._stop = threading.Event()
         self._init_com()
 
@@ -854,7 +866,7 @@ class WindowsVolume:
         self._CLSID_enum = guid("{BCDE0395-E52F-467C-8E3D-C4579291692E}")
         self._IID_enum = guid("{A95664D2-9614-4F35-A746-DE8DB63617E6}")
         self._IID_epvol = guid("{5CDF2C82-841E-4546-9722-0CF74078229A}")
-        # прототипы методов COM (индексы vtable см. в вызовах ниже)
+        # the COM method prototypes (the vtable indexes are in the calls below)
         self._P_EP = ctypes.WINFUNCTYPE(ctypes.HRESULT, c_void_p, c_long,
                                         c_long, POINTER(c_void_p))
         self._P_ACT = ctypes.WINFUNCTYPE(ctypes.HRESULT, c_void_p, POINTER(_GUID),
@@ -880,15 +892,15 @@ class WindowsVolume:
             return False
 
     def _call(self, obj, idx, proto, *args):
-        """Вызов метода COM-объекта по индексу vtable."""
+        """Call a COM object method by the vtable index."""
         vt = self._cast(self._cast(obj, self._POINTER(self._c_void_p)).contents,
                         self._POINTER(self._c_void_p))
         fn = self._ct.cast(vt[idx], proto)
         return fn(obj, *args)
 
     def percent(self) -> int | None:
-        """0-100 или None (нет аудиоустройства). Свежий кэш фонового
-        поллера отдаётся мгновенно, иначе прямой COM-вызов (~2 мс)."""
+        """0-100 or None (no audio device). A fresh cache from the background
+        poller is returned instantly, otherwise a direct COM call (~2 ms)."""
         if self._cache is not None and time.monotonic() - self._cache_t < 0.5:
             return self._cache
         if self._dead:
@@ -902,11 +914,12 @@ class WindowsVolume:
                 self._cache = max(0, min(100, int(round(v.value * 100))))
                 self._cache_t = time.monotonic()
                 return self._cache
-            self._ep = None        # устройство могло пересоздаться — откроем заново
+            self._ep = None        # the device may have been recreated — reopen
         return None
 
     def fresh(self) -> int | None:
-        """Точное значение напрямую из ОС, минуя кэш (для «осадочного» пуша)."""
+        """The exact value straight from the OS, bypassing the cache (for the
+        "settle" push)."""
         if self._dead:
             return None
         for _ in (1, 2):
@@ -922,12 +935,12 @@ class WindowsVolume:
         return None
 
     def nudge(self, v: int) -> None:
-        """Кэшу придано предсказанное значение (после пуша по тику качельки)."""
+        """The cache is given a predicted value (after a push on a rocker tick)."""
         self._cache = max(0, min(100, int(v)))
         self._cache_t = time.monotonic()
 
     def muted(self) -> bool | None:
-        """Состояние mute (GetMute, vtable 15) или None."""
+        """The mute state (GetMute, vtable 15) or None."""
         if self._dead or self._ep is None:
             return None
         m = self._ct.c_int()
@@ -935,9 +948,10 @@ class WindowsVolume:
         return None if hr != 0 else bool(m.value)
 
     def start_poller(self, interval: float = 0.1) -> None:
-        """Фон: держим громкость «под рукой» (кэш ~10 Гц), чтобы пуш OSD
-        не ждал ни COM-вызова, ни главного цикла; попутно ловим переход
-        mute→unmute и зовём on_unmute (OSD уровня после Unmute)."""
+        """Background: keep the volume "at hand" (a ~10 Hz cache) so the OSD
+        push does not wait for either a COM call or the main loop; along the
+        way catch the mute→unmute transition and call on_unmute (a level OSD
+        after Unmute)."""
         self._cache_t = 0.0
         self._cache = None
 
@@ -965,24 +979,25 @@ class WindowsVolume:
 
 
 class MacVolume:
-    """Мастер-громкость вывода macOS через CoreAudio (чистый ctypes, без
-    зависимостей). Интерфейс 1:1 с WindowsVolume: percent/fresh/nudge/muted/
-    start_poller/stop/on_unmute. Читаем каждое значение напрямую — полный
-    цикл (default device + volume + mute) ~0.07 мс, кэш и поллер — как у
-    винды. macOS 26 сменила fourcc-селекторы ('defa'→'dOut', volume →
-    'volm'), старые возвращают 'who?', поэтому каждый селектор — цепочка
-    новых + легаси, рабочий вариант кэшируется первым успехом."""
+    """The macOS master output volume via CoreAudio (pure ctypes, no
+    dependencies). The interface is 1:1 with WindowsVolume:
+    percent/fresh/nudge/muted/start_poller/stop/on_unmute. Every value is
+    read directly — a full cycle (default device + volume + mute) is
+    ~0.07 ms, the cache and the poller are like on Windows. macOS 26 changed
+    the fourcc selectors ('defa'→'dOut', volume → 'volm'), the old ones
+    return 'who?', so every selector is a chain of new + legacy, the working
+    one is cached on the first success."""
 
     _GLOB = 0x676C6F62          # 'glob'
     _OUTP = 0x6F757470          # 'outp'
 
     def __init__(self):
         self._ca = None
-        self._sel = {}          # ключ свойства → рабочий fourcc (1-й успех)
+        self._sel = {}          # a property key → the working fourcc (the 1st success)
         self._cache = None
         self._cache_t = 0.0
         self._muted_live = None
-        self._muted = None      # прошлое состояние — детектор unmute в поллере
+        self._muted = None      # the previous state — the unmute detector in the poller
         self.on_unmute: Callable[[], None] | None = None
         self._stop = threading.Event()
         try:
@@ -996,7 +1011,7 @@ class MacVolume:
                 ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32),
                 ctypes.c_void_p]
         except Exception as e:
-            log("CoreAudio недоступен (%s) — OSD громкости работать не будет" % e)
+            log("CoreAudio unavailable (%s) — the volume OSD will not work" % e)
 
     class _AOPA(ctypes.Structure):
         _fields_ = [("sel", ctypes.c_uint32), ("scope", ctypes.c_uint32),
@@ -1004,8 +1019,8 @@ class MacVolume:
 
     def _get(self, key: str, fourccs: tuple[int, ...], oid: int, scope: int,
              typ) -> int | float | None:
-        """Свойство объекта по цепочке селекторов (macOS 26+ / легаси).
-        Рабочий fourcc кэшируется — дальше один CA-вызов."""
+        """An object property over a chain of selectors (macOS 26+ / legacy).
+        The working fourcc is cached — then a single CA call."""
         if self._ca is None:
             return None
         ct = self._ct
@@ -1023,8 +1038,8 @@ class MacVolume:
         return None
 
     def _read(self):
-        """(vol 0..1, muted) или None. Дефолтное устройство — на каждый запрос:
-        при переключении вывода id меняется, lookup копеечный."""
+        """(vol 0..1, muted) or None. The default device — on every request:
+        on an output switch the id changes, the lookup is dirt cheap."""
         dev = self._get("dev", (0x644F7574, 0x64656661),   # 'dOut' / 'defa'
                         1, self._GLOB, self._ct.c_uint32)
         if dev is None:
@@ -1065,10 +1080,11 @@ class MacVolume:
         def poll():
             while not self._stop.is_set():
                 try:
-                    # fresh(), не percent(): кэш громкости живёт 0.5 с, а
-                    # _muted_live обновляет только fresh — с percent() переход
-                    # mute ловился раз в 0.5+ с (главный лаг unmute-пуша;
-                    # полный цикл чтения ~0.07 мс — кэш тут не нужен).
+                    # fresh(), not percent(): the volume cache lives 0.5 s, while
+                    # _muted_live is updated only by fresh — with percent() the
+                    # mute transition was caught once per 0.5+ s (the main
+                    # unmute-push lag; a full read cycle is ~0.07 ms — no cache
+                    # needed here).
                     self.fresh()
                     m = self.muted()
                     if m is not None:
@@ -1090,22 +1106,25 @@ class MacVolume:
 
 
 class VolumeWorker(threading.Thread):
-    """Стрельба `51 0C` со СТРОГОЙ каденцией в окне серии (live-калибровка
-    2026-10-05: интервалы <50 мс ломают OSD-слой — заморозка/блинк/ресеты;
-    50 мс (20 Гц) — верхний рабочий темп, каденция ограничивается им).
+    """Firing `51 0C` with a STRICT cadence within the series window (live
+    calibration 2026-10-05: intervals <50 ms break the OSD layer — a
+    freeze/blink/resets; 50 ms (20 Hz) is the top working pace, the cadence
+    is capped by it).
 
-    Тик качельки открывает окно WINDOW_S (каждый тик продлевает); внутри окна
-    воркер раз в 1/hz берёт СВЕЖЕЕ значение из ОС (прямой COM-вызов, ~2 мс) и
-    пушит его при изменении; первый такт окна пушит всегда — тик без изменения
-    значения (упор в 0/100%) тоже должен показать оверлей. Стрельба таймером,
-    а не по событиям: авто-репитов качельки в зеркале нет (один тик на нажатие,
-    дамп 2026-10-05), а темп пушей ограничен порогом OSD-слоя, см. выше.
-    (Ранний вариант спал фиксированные 20 мс после каждого пуша и во время
-    рампа громкости Windows выдавал ~40 Гц — режим гарантированного фриза.)"""
+    A rocker tick opens the WINDOW_S window (every tick extends it); inside
+    the window the worker once per 1/hz takes the FRESH value from the OS
+    (a direct COM call, ~2 ms) and pushes it on change; the first tick of
+    the window always pushes — a tick without a value change (hitting the
+    0/100% stop) must also show the overlay. Firing by a timer, not by
+    events: the rocker auto-repeats are not in the mirror (one tick per
+    press, the dump of 2026-10-05), and the push pace is capped by the OSD
+    layer threshold, see above.
+    (The early variant slept a fixed 20 ms after every push and during a
+    Windows volume ramp produced ~40 Hz — a guaranteed freeze mode.)"""
 
     WINDOW_S = 0.6
-    MAX_HZ = 20.0            # live-порог: 50 мс ок, 40 мс — blink/reset
-    UNMUTE_GRACE_S = 1.0     # пресс → ОС применяет mute за десятки мс (запас на поллер)
+    MAX_HZ = 20.0            # the live threshold: 50 ms ok, 40 ms — blink/reset
+    UNMUTE_GRACE_S = 1.0     # a press → the OS applies the mute within tens of ms (a margin for the poller)
 
     def __init__(self, kbd: M901, volume: WindowsVolume | MacVolume,
                  hz: float = 12.0):
@@ -1113,26 +1132,27 @@ class VolumeWorker(threading.Thread):
         self._kbd = kbd
         self._vol = volume
         if hz > self.MAX_HZ:
-            log("--vol-hz %g превышает порог OSD (%g Гц) — ограничен "
-                "(live-калибровка 2026-10-05: <50 мс = фриз)" % (hz, self.MAX_HZ))
+            log("--vol-hz %g exceeds the OSD threshold (%g Hz) — capped "
+                "(live calibration 2026-10-05: <50 ms = a freeze)" % (hz, self.MAX_HZ))
             hz = self.MAX_HZ
         self._cadence = 1.0 / max(1.0, float(hz))
         self._until = 0.0
         self._last = None
         self._was_open = False
         self._stop_evt = False
-        self._press_t = 0.0     # последний пресс качельки (0 = давно) — гейт unmute
+        self._press_t = 0.0     # the last rocker press (0 = long ago) — the unmute gate
 
     def tick(self, code: int) -> None:
-        if code == 0x02:    # пресс качельки: окно НЕ открываем — только метка
-            self._press_t = time.monotonic()   # происхождения для unmute-гейта
+        if code == 0x02:    # a rocker press: the window is NOT opened — only a mark
+            self._press_t = time.monotonic()   # of origin for the unmute gate
             return
         self._until = time.monotonic() + self.WINDOW_S
 
     def unmute_gate(self) -> None:
-        """Пушить уровень на unmute только если тот пришёл от пресса качельки:
-        без гейта unmute средствами macOS (F10/пункт меню) тоже пускал OSD
-        (запрос 2026-10-05: пуш — только в ответ на unmute с клавиатуры)."""
+        """Push the level on unmute only if it came from a rocker press:
+        without the gate an unmute done via macOS (F10/a menu item) also
+        fired the OSD (the request of 2026-10-05: a push — only in response
+        to an unmute from the keyboard)."""
         if time.monotonic() - self._press_t <= self.UNMUTE_GRACE_S:
             self.kick()
 
@@ -1140,12 +1160,13 @@ class VolumeWorker(threading.Thread):
         self._stop_evt = True
 
     def kick(self) -> None:
-        """Открыть окно с ГАРАНТИРОВАННЫМ пушом (реакция на Unmute — запрос
-        2026-10-05: «уровень громкости в ответ на Unmute»). _last=None →
-        первый такт каденции пушит всегда; NAK (тракт занят сразу после
-        нажатия качельки) ретраится на следующем такте — прежний одиночный
-        пуш из потока поллера без ретрая терялся («не всегда пушится»).
-        Вызывается из потока поллера, воркер делает остальное."""
+        """Open the window with a GUARANTEED push (the reaction to Unmute — a
+        request of 2026-10-05: "the volume level in response to Unmute").
+        _last=None → the first cadence tick always pushes; a NAK (the path
+        is busy right after a rocker press) is retried on the next tick —
+        the former single push from the poller thread without a retry was
+        getting lost ("does not always push"). Called from the poller
+        thread, the worker does the rest."""
         self._until = time.monotonic() + self.WINDOW_S
         self._last = None
 
@@ -1155,9 +1176,9 @@ class VolumeWorker(threading.Thread):
             now = time.monotonic()
             if now >= self._until:
                 self._was_open = False
-                time.sleep(0.005)     # короткий idle: старт окна без латентности
+                time.sleep(0.005)     # a short idle: a window start without latency
                 continue
-            if now < next_push:       # каденция: не раньше следующего такта
+            if now < next_push:       # the cadence: not earlier than the next tick
                 time.sleep(min(0.005, next_push - now))
                 continue
             v = self._vol.fresh()
@@ -1165,25 +1186,26 @@ class VolumeWorker(threading.Thread):
             if v is not None and (first or v != self._last):
                 if self._kbd.push_volume_osd(v):
                     self._last = v
-                    log("OSD громкости: %d%%" % v)
-                    # Пока значение меняется при активной серии — продлеваем
-                    # окно. Ключево для удержания: vendor-зеркало качельки
-                    # авто-репитит один раз на нажатие, а Windows при удержании
-                    # сам рампит громкость шагами по 2% — без продления окно
-                    # закрылось бы через 0.6 c после последнего тика, и OSD
-                    # отстал от рампа (лог 18:35–18:36 2026-10-05).
+                    log("volume OSD: %d%%" % v)
+                    # While the value keeps changing during an active series —
+                    # extend the window. Key for holding: the rocker vendor
+                    # mirror auto-repeats once per press, and Windows ramps
+                    # the volume itself in 2% steps while held — without the
+                    # extension the window would close 0.6 s after the last
+                    # tick and the OSD would lag the ramp (the 18:35–18:36
+                    # log of 2026-10-05).
                     if self._until > now:
                         self._until = now + self.WINDOW_S
-                # не прошли — повтор на следующем такте каденции
+                # it did not make it — a retry on the next cadence tick
             self._was_open = True
             next_push = max(next_push + self._cadence, time.monotonic())
 
 
 def start_gate_watcher(kbd: M901) -> None:
-    """Журнал гейта OSD [0x23000CA0] (12 00 payload[8], 10 Гц): 51 0C
-    рендерится только при 0 — трассировка поведения гейта в сценарии
-    press-hold-release качельки (фриз значения на OLED, 2026-10-05).
-    ВАЖНО: 12 00 отвечает только на фиксированном echo=0000."""
+    """A log of the OSD gate [0x23000CA0] (12 00 payload[8], 10 Hz): 51 0C
+    renders only at 0 — tracing the gate behavior in the press-hold-release
+    rocker scenario (the value freeze on the OLED, 2026-10-05).
+    IMPORTANT: 12 00 replies only on the fixed echo=0000."""
     def w():
         prev = None
         while True:
@@ -1191,7 +1213,7 @@ def start_gate_watcher(kbd: M901) -> None:
             if r and r[0] == 0x12 and len(r) > 12:
                 g = r[12]
                 if g != prev:
-                    log("гейт OSD [0x23000CA0] = %d" % g)
+                    log("the OSD gate [0x23000CA0] = %d" % g)
                     prev = g
             time.sleep(0.1)
 
@@ -1203,70 +1225,71 @@ def run(kbd: M901, args) -> None:
     enabled = enabled_slots(args)
     do_monitor = SLOT_MONITOR in enabled
     if args.evt_dump:
-        # журнал транзакций: ловим, какой именно обмен NAK'ается в окно блинка
+        # a transaction log: catch which exact exchange NAKs in the blink window
         m901_client.TXLOG = lambda cmd, sub, e, r, nak, ms: log(
-            "tx %02X.%02X echo=%04X → %s (%.0f мс)" % (
+            "tx %02X.%02X echo=%04X → %s (%.0f ms)" % (
                 cmd, sub, e,
-                "NAK" if nak else (r[:8].hex(" ") if r else "нет-ответа"), ms))
+                "NAK" if nak else (r[:8].hex(" ") if r else "no-reply"), ms))
         start_gate_watcher(kbd)
     cons = open_events(kbd) if args.events else None
     volume = MacVolume() if sys.platform == "darwin" else WindowsVolume()
-    # 50 мс: unmute ловится опросом состояния, квант опроса = задержка пуша
+    # 50 ms: the unmute is caught by polling the state, the poll quantum = the push delay
     volume.start_poller(0.05)
     vol_worker = VolumeWorker(kbd, volume, hz=args.vol_hz)
     if not args.no_volume:
         vol_worker.start()
-        volume.on_unmute = vol_worker.unmute_gate   # пуш — только на unmute качельки
+        volume.on_unmute = vol_worker.unmute_gate   # a push — only on a rocker unmute
     ffc0 = start_ffc0_reader(kbd, on_tick=vol_worker.tick if not args.no_volume else None)
-    slides = args.monitor_items   # проверенный непустой список (parse_monitor_items в main)
+    slides = args.monitor_items   # a validated non-empty list (parse_monitor_items in main)
     n_slides = len(slides)
-    slide_warned = set()   # слайды temp/volt, о пропуске которых уже предупредили
-    dead_slides = set()    # структурно несуществующие слайды (gpu.fan и пр.)
+    slide_warned = set()   # the temp/volt slides already warned about
+    dead_slides = set()    # structurally nonexistent slides (gpu.fan etc.)
     last_pairs = None
     last_bat = None
     warn_bat = True
     slide_phase = 0
     slide_tick = -1
-    hold_until = 0.0       # пауза автолистания после ручного свайпа
-    last_min = None        # минута последней синхронизации часов
-    last_push_t = 0.0      # heartbeat: безусловный пуш раз в HEARTBEAT_S
+    hold_until = 0.0       # the auto-paging pause after a manual swipe
+    last_min = None        # the minute of the last clock sync
+    last_push_t = 0.0      # the heartbeat: an unconditional push every HEARTBEAT_S
     t_wake = t_stat = time.monotonic()
     if do_monitor:
         if args.slideshow:
-            mode_desc = "слайдшоу %.1f с [%s]" % (args.slideshow, ",".join(slides))
-            log("слайды: %s" % " → ".join("%s(0x%02X)" % (n, slide_sel(n))
+            mode_desc = "a slideshow %.1f s [%s]" % (args.slideshow, ",".join(slides))
+            log("slides: %s" % " → ".join("%s(0x%02X)" % (n, slide_sel(n))
                                           for n in slides))
         else:
             mode_desc = args.metrics
     else:
-        mode_desc = "монитор выключен (виджеты: %s)" % ", ".join(
+        mode_desc = "the monitor is off (the widgets: %s)" % ", ".join(
             WIDGET_NAMES[s] for s in enabled)
-    log("цикл запущен: интервал %.1f с, %s (Ctrl+C/SIGTERM — выход)"
+    log("the loop is running: interval %.1f s, %s (Ctrl+C/SIGTERM to exit)"
         % (args.interval, mode_desc))
     if not do_monitor and not args.keep_awake:
-        log("динамических виджетов нет — дисплей уснёт по своему таймауту "
-            "(пушить нечего, см. --keep-awake)")
+        log("no dynamic widgets — the display will fall asleep on its own "
+            "timeout (nothing to push, see --keep-awake)")
     try:
         while not STOP.is_set():
             now = time.monotonic()
-            # Дрен 0xFFC0 нужен всегда (очередь не должна расти), тики качельки
-            # уходят в VolumeWorker прямо из reader-потока.
+            # The 0xFFC0 drain is always needed (the queue must not grow); the
+            # rocker ticks go to the VolumeWorker straight from the reader thread.
             swipes, _ticks = poll_ffc0(ffc0, dump=args.evt_dump) if ffc0 else (0, 0)
             if do_monitor:
                 if args.slideshow:
-                    # Слайдшоу как у GearLink (§10.6): тайл перезаписывается
-                    # одиночным пушем с очередным селектором. Автопрокрутка —
-                    # таймером; свайп вниз (03 96) листает немедленно и ставит
-                    # автолистание на паузу. Свайп ВВЕРХ прошивка хосту не
-                    # сообщает вообще (чистая сессия 2026-10-05: >10 вверх —
-                    # ноль событий на обоих каналах iface2), поэтому
-                    # «назад» хостом не реализуемо — только вперёд, как GearLink.
+                    # The slideshow like GearLink's (§10.6): the tile is
+                    # overwritten by a single push with the next selector.
+                    # The auto-scroll is timer-driven; a swipe down (03 96)
+                    # pages immediately and puts the auto-paging on pause.
+                    # A swipe UP is not reported to the host by the firmware
+                    # at all (a clean session of 2026-10-05: >10 up — zero
+                    # events on both iface2 channels), so "back" is not
+                    # implementable by the host — forward only, like GearLink.
                     if swipes:
                         slide_phase = (slide_phase + swipes) % n_slides
                         last_pairs = None
                         hold_until = now + SWIPE_PAUSE_S
                         slide_tick = int(now / args.slideshow)
-                        log("свайп вниз → слайд %d/%d «%s» (автолистание на паузе %g с)"
+                        log("swipe down → slide %d/%d \"%s\" (the auto-paging paused for %g s)"
                             % (slide_phase + 1, n_slides, slides[slide_phase],
                                SWIPE_PAUSE_S))
                     elif now >= hold_until:
@@ -1276,13 +1299,13 @@ def run(kbd: M901, args) -> None:
                             slide_phase = (slide_phase + 1) % n_slides
                             last_pairs = None
                     else:
-                        # на паузе: держим текущий кадр и фазу таймера
+                        # paused: keep the current frame and the timer phase
                         slide_tick = int(now / args.slideshow)
-                    # Значение очередного слайда; temp/volt без сенсора
-                    # пропускаются (однократное предупреждение), автолистание
-                    # двигается дальше. Структурно несуществующий слайд
-                    # (gpu.fan и т.п.) — одно сообщение в лог, дальше слайд
-                    # «мёртв»; мертвы ВСЕ — фолбэк cpu.usage (есть всегда).
+                    # The value of the next slide; temp/volt without a sensor
+                    # are skipped (a one-time warning), the auto-paging moves
+                    # on. A structurally nonexistent slide (gpu.fan etc.) —
+                    # one log message, then the slide is "dead"; if ALL are
+                    # dead — the cpu.usage fallback (always available).
                     pairs = None
                     for _ in range(n_slides):
                         name = slides[slide_phase]
@@ -1292,10 +1315,10 @@ def run(kbd: M901, args) -> None:
                             val = None
                             if name not in dead_slides:
                                 dead_slides.add(name)
-                                log("слайд «%s»: такого сенсора нет (%s)"
+                                log("the slide \"%s\": no such sensor (%s)"
                                     % (name, e))
                                 if len(dead_slides) >= n_slides:
-                                    log("все слайды без сенсоров — фолбэк cpu.usage")
+                                    log("all the slides are without sensors — the cpu.usage fallback")
                                     slides = ["cpu.usage"]
                                     n_slides = 1
                                     slide_phase = 0
@@ -1313,8 +1336,8 @@ def run(kbd: M901, args) -> None:
                             slide_warned.add(name)
                             need = ("macmon (brew install macmon)"
                                     if sys.platform == "darwin" else
-                                    "запущенный LibreHardwareMonitor (pip install wmi)")
-                            log("слайд «%s» пропущен: сенсор недоступен — нужен %s"
+                                    "a running LibreHardwareMonitor (pip install wmi)")
+                            log("the slide \"%s\" is skipped: the sensor is unavailable — %s is needed"
                                 % (name, need))
                         slide_phase = (slide_phase + 1) % n_slides
                         slide_tick = int(now / args.slideshow)
@@ -1324,26 +1347,26 @@ def run(kbd: M901, args) -> None:
                         pairs_differ(pairs, last_pairs)
                         or now - last_push_t >= HEARTBEAT_S):
                     if robust_push(kbd, kbd.push_metrics, pairs):
-                        log("пуш 0x66: " + ", ".join(
+                        log("the 0x66 push: " + ", ".join(
                             "%s=%d" % (pair_label(sel, dig), val)
                             for sel, dig, val in pairs))
                         last_pairs = pairs
                         last_push_t = now
                     else:
-                        log("пуш 0x66 не подтверждён (NAK/нет ответа)")
+                        log("the 0x66 push not acknowledged (NAK/no reply)")
             if args.battery:
                 pct = resolve_battery(args, sensors)
                 if pct is None:
                     if warn_bat and args.bat is None:
-                        log("батарея хоста не найдена — виджет батареи не пушится")
+                        log("the host battery not found — the battery widget is not pushed")
                         warn_bat = False
                 elif last_bat is None or abs(pct - last_bat) >= 1:
                     if robust_push(kbd, kbd.set_slot2_value, pct, 0):
-                        log("батарея ПК → слот %d: %d%%" % (SLOT_BATTERY, pct))
+                        log("the PC battery → slot %d: %d%%" % (SLOT_BATTERY, pct))
                         last_bat = pct
-            # Экранные часы — статичный текст от 0x63, сами не тикают
-            # (подтверждено 2026-10-04: время висело с прошлого запуска).
-            # Синхронизируем на границе каждой минуты.
+            # The on-screen clock is static text from 0x63, it does not tick
+            # by itself (confirmed 2026-10-04: the time hung over from the
+            # previous run). Sync at the boundary of every minute.
             if args.clock and not args.no_clock:
                 now_dt = dt.datetime.now()
                 if last_min is None or (now_dt.second < 5 and now_dt.minute != last_min):
@@ -1355,11 +1378,11 @@ def run(kbd: M901, args) -> None:
             if cons:
                 drain_events(cons)
             if now - t_stat >= STAT_EVERY_S:
-                log("клава: батарея %s%%, слот %s, страница %s"
+                log("kbd: battery %s%%, slot %s, page %s"
                     % (kbd.get_battery(), kbd.get_current_slot(),
                        kbd.get_current_page()))
                 t_stat = now
-            # wait, не sleep: STOP просыпается сразу, не дожидаясь таймаута
+            # wait, not sleep: STOP wakes up immediately, without waiting out the timeout
             STOP.wait(1.0 if args.slideshow else (0.4 if args.demo else args.interval))
     finally:
         vol_worker.stop()
@@ -1369,126 +1392,129 @@ def run(kbd: M901, args) -> None:
 
 
 def once(kbd: M901, args) -> None:
-    """Разовая проверка: раскладка + пуш значений, как стартовая пачка GearLink.
-    Пушится только включённое (флаги контента включают свой виджет сами);
-    после выхода раскладка ОСТАЁТСЯ на экране — это режим визуальной сверки,
-    graceful shutdown его не глушит."""
+    """A one-shot check: the layout + a push of the values, like the GearLink
+    startup batch. Only what is enabled gets pushed (the content flags enable
+    their widget themselves); after the exit the layout STAYS on screen — it
+    is the visual verification mode, graceful shutdown does not turn it
+    off."""
     apply_layout(kbd, args)
     sensors = HostSensors()
     if SLOT_MONITOR in enabled_slots(args):
         pairs = resolve_pairs(args, sensors)
         for i in range(2):
             ok = kbd.push_metrics(pairs)
-            log("пуш 0x66 #%d: %s → %s" % (i + 1, ", ".join(
+            log("the 0x66 push #%d: %s → %s" % (i + 1, ", ".join(
                 "%s=%d" % (pair_label(sel, dig), val) for sel, dig, val in pairs),
-                "ok" if ok else "БЕЗ ОТВЕТА"))
+                "ok" if ok else "NO REPLY"))
             if ok and i == 0:
                 time.sleep(0.3)
     if args.battery:
         pct = resolve_battery(args, sensors)
         if pct is not None:
-            log("батарея ПК %d%% → 0x64 %s" % (pct, kbd.set_slot2_value(pct, 0)))
+            log("the PC battery %d%% → 0x64 %s" % (pct, kbd.set_slot2_value(pct, 0)))
     if args.clock and not args.no_clock:
         sync_clock(kbd)
-    log("готово; экран сейчас — сверяй надписи на OLED")
+    log("done; the screen is set up now — check the captions on the OLED")
 
 
 def status(kbd: M901, args) -> None:
-    """Только чтение: ничего не пишет в устройство."""
-    print("== устройство ==")
+    """Read-only: writes nothing to the device."""
+    print("== device ==")
     flags = kbd.get_status_flags()
     if flags is not None:
         on = ["%d %s" % (s, WIDGET_NAMES[s]) for s, f in enumerate(flags) if f]
-        print(" маска слотов (0x24/02): %s → включены: %s" % (flags, ", ".join(on) or "нет"))
-    print(" текущий слот (0x24/01):", kbd.get_current_slot())
-    print(" текущая страница (0x21):", kbd.get_current_page())
-    print(" экран включён (0x23/02):", kbd.get_screen_state())
-    print(" батарея клавиатуры (0x12/01):", kbd.get_battery(), "%")
+        print(" the slot mask (0x24/02): %s → enabled: %s" % (flags, ", ".join(on) or "none"))
+    print(" the current slot (0x24/01):", kbd.get_current_slot())
+    print(" the current page (0x21):", kbd.get_current_page())
+    print(" the screen on (0x23/02):", kbd.get_screen_state())
+    print(" the keyboard battery (0x12/01):", kbd.get_battery(), "%")
     st = kbd.get_status_struct()
     if st:
-        print(" последние метрики (0x12/00): temp=%d usage=%d metric3=%d" % (
+        print(" the last metrics (0x12/00): temp=%d usage=%d metric3=%d" % (
             int.from_bytes(st[0:2], "little"), int.from_bytes(st[2:4], "little"),
             int.from_bytes(st[4:6], "little")))
-    print("== хост ==")
+    print("== host ==")
     s = HostSensors()
-    print(" CPU %s%%, RAM %s%%, temp %s, батарея %s" % (
+    print(" CPU %s%%, RAM %s%%, temp %s, battery %s" % (
         s.cpu_load(), s.ram_load(),
         ("%d°C" % s.cpu_temp()) if s.cpu_temp() is not None else "n/a",
         ("%d%%" % round(s.battery().percent)) if s.battery() else "n/a"))
 
 
 def wait_reconnect() -> M901 | None:
-    """Ждать возврата клавиатуры на шину, вернуть свежий M901
-    (или None — останов по сигналу, пока ждали)."""
+    """Wait for the keyboard to return to the bus, return a fresh M901
+    (or None — stopped by a signal while waiting)."""
     warned = False
     while not STOP.is_set():
         try:
             k = M901()
-            log("клавиатура вернулась — перезапускаю раскладку")
+            log("the keyboard is back — restarting the layout")
             return k
         except Exception:
             if not warned:
-                log("клавиатуры нет на шине — жду переподключения (Ctrl+C — выход)")
+                log("no keyboard on the bus — waiting for a reconnect (Ctrl+C to exit)")
                 warned = True
             STOP.wait(2.0)
     return None
 
 
 def shutdown_widgets(kbd: M901) -> None:
-    """Graceful shutdown: погасить все включённые виджеты, КРОМЕ баннера.
-    Часы замрут на последней синхронизации, батарея/метрики протухнут —
-    без демона динамические виджеты показывают неверные данные; офлайн
-    (без пушей с хоста) живут только баннер и KPS, дефолтный остаток —
-    баннер. OLED требует хотя бы один включённый виджет (пустая маска
-    некорректна), поэтому выключенный баннер включается ПЕРВЫМ и сразу
-    становится текущим слотом — и только потом гасится динамика (порядок
-    см. в теле). Идемпотентно: гасим только включённые биты маски 1..4;
-    ошибки транспорта (устройство уже пропало) не мешают закрытию."""
+    """Graceful shutdown: turn off all the enabled widgets EXCEPT the banner.
+    The clock will freeze at the last sync, the battery/metrics will go
+    stale — without the daemon the dynamic widgets show wrong data; offline
+    (without host pushes) only the banner and KPS live, the default
+    remainder is the banner. The OLED requires at least one enabled widget
+    (an empty mask is invalid), so a disabled banner is enabled FIRST and
+    immediately becomes the current slot — and only then is the dynamics
+    turned off (the order is in the body). Idempotent: only the enabled
+    bits 1..4 of the mask are turned off; transport errors (the device
+    already gone) do not block the shutdown."""
     try:
         mask = kbd.get_status_flags()
     except Exception as e:
-        log("останов: маску слотов не прочитать (%s) — гашу 1..4 вслепую" % e)
+        log("shutdown: the slot mask unreadable (%s) — turning 1..4 off blindly" % e)
         mask = None
     off = [s for s in range(5) if s != SLOT_BANNER and (mask is None or mask[s])]
-    # Пустая маска невалидна: баннер выключен (или маску не прочитать) —
-    # после гашения динамики возвращаем баннер.
+    # An empty mask is invalid: the banner is off (or the mask unreadable) —
+    # after turning the dynamics off, bring the banner back.
     need_banner = mask is None or not mask[SLOT_BANNER]
     if not off and not need_banner:
-        log("останов: динамические виджеты уже выключены (маска %s)" % (mask,))
+        log("shutdown: the dynamic widgets are already off (the mask %s)" % (mask,))
         return
-    # ПОРЯДОК ВАЖЕН (как в apply_layout): прошивка валидирует каждую 6A
-    # против текущей маски («ноль виджетов оставить нельзя»), поэтому
-    # fallback-баннер включаем и делаем текущим слотом ДО гашения —
-    # иначе выключения могут молча игнорироваться (проверено 2026-10-05).
+    # THE ORDER MATTERS (as in apply_layout): the firmware validates every 6A
+    # against the current mask ("leaving zero widgets is not allowed"), so
+    # the fallback banner is enabled and made the current slot BEFORE the
+    # shutdown — otherwise the disables may be silently ignored (verified
+    # 2026-10-05).
     try:
         if need_banner:
             if not kbd.set_widget(SLOT_BANNER, True):    # 6A 00 00 01
-                log("останов: баннер не подтвердил включение")
-        kbd.select_slot(SLOT_BANNER)     # 6A 01 00 — баннер становится текущим
+                log("shutdown: the banner did not acknowledge enabling")
+        kbd.select_slot(SLOT_BANNER)     # 6A 01 00 — the banner becomes the current slot
     except Exception as e:
-        log("останов: баннер не поднять (%s) — гашу динамику дальше" % e)
+        log("shutdown: cannot raise the banner (%s) — turning the dynamics off anyway" % e)
     for slot in off:
         try:
             if not kbd.set_widget(slot, False):          # 6A 00 <slot> 00
-                log("останов: слот %d не подтвердил выключение" % slot)
+                log("shutdown: slot %d did not acknowledge disabling" % slot)
         except Exception as e:
-            log("останов: слот %d не погасился (%s) — транспорт мёртв?" % (slot, e))
+            log("shutdown: slot %d did not turn off (%s) — is the transport dead?" % (slot, e))
             return
     try:
-        kbd.commit()                        # 50 55 — маска менялась
+        kbd.commit()                        # 50 55 — the mask changed
     except Exception as e:
-        log("останов: commit не прошёл (%s)" % e)
+        log("shutdown: commit failed (%s)" % e)
         return
-    log("останов: погашены слоты %s, баннер %s"
+    log("shutdown: turned off the slots %s, the banner %s"
         % (", ".join("%d %s" % (s, WIDGET_NAMES[s]) for s in off) or "—",
-           "включён заново (маска не может быть пустой)" if need_banner
-           else "активен"))
+           "re-enabled (the mask cannot be empty)" if need_banner
+           else "active"))
 
 
-# ---------- автозапуск (v0.3): задача планировщика текущего пользователя ----------
+# ---------- autostart (v0.3): a current-user scheduler task ----------
 
 def _pythonw() -> str:
-    """pythonw.exe того же интерпретатора (запуск БЕЗ консольного окна)."""
+    """The pythonw.exe of the same interpreter (running WITHOUT a console window)."""
     cand = Path(sys.executable).with_name("pythonw.exe")
     if cand.is_file():
         return str(cand)
@@ -1496,11 +1522,12 @@ def _pythonw() -> str:
 
 
 def autostart_command() -> list[str]:
-    """Команда демона в автозадаче: pythonw + этот скрипт + рабочий набор
-    флагов. Виджеты заданы явно (без флагов демон включил бы только баннер):
-    классический набор часы+батарея+монитор, слайдшоу 2 с. --log-file без
-    значения = logs/azoth-companion.log рядом с azoth-companion.py — CWD задачи при логоне
-    не гарантирован, поэтому путь должен быть не относительным."""
+    """The daemon command in the autostart task: pythonw + this script + the
+    working flag set. The widgets are given explicitly (without flags the
+    daemon would enable the banner only): the classic clock+battery+monitor
+    set, a 2 s slideshow. --log-file without a value = logs/azoth-companion.log
+    next to azoth-companion.py — the task CWD at logon is not guaranteed, so
+    the path must not be relative."""
     return [_pythonw(), str(Path(__file__).resolve()),
             "--clock", "--battery", "--monitor",
             "--slideshow", "2", "--log-file"]
@@ -1509,7 +1536,7 @@ def autostart_command() -> list[str]:
 def _schtasks(*argv: str) -> tuple[int, str]:
     r = subprocess.run(["schtasks", *argv], capture_output=True)
     out = b"\n".join(x for x in (r.stdout, r.stderr) if x)
-    for enc in ("utf-8", "cp866"):    # schtasks пишет в OEM-кодировке консоли
+    for enc in ("utf-8", "cp866"):    # schtasks writes in the console OEM encoding
         try:
             return r.returncode, out.decode(enc)
         except UnicodeDecodeError:
@@ -1520,33 +1547,33 @@ def _schtasks(*argv: str) -> tuple[int, str]:
 def query_autostart() -> None:
     code, out = _schtasks("/query", "/tn", AUTOSTART_TASK)
     if code != 0:
-        log("autostart: задача «%s» не найдена" % AUTOSTART_TASK)
+        log("autostart: the task \"%s\" not found" % AUTOSTART_TASK)
         return
     rows = [ln.strip() for ln in out.splitlines() if ln.strip()]
-    log("autostart: %s" % (rows[-1] if rows else "задача на месте"))
+    log("autostart: %s" % (rows[-1] if rows else "the task is in place"))
 
 
 def install_autostart() -> None:
-    """Задача «Azoth Companion»: запуск при логоне текущего пользователя, права
-    администратора не нужны. Способ 1 — команда `schtasks /create /sc onlogon`
-    (у неё триггер «ЛЮБОЙ вход» — на большинстве машин требует админа);
-    при отказе способ 2 — XML-регистрация: LogonTrigger только для текущего
-    пользователя + InteractiveToken + LeastPrivilege, т.е. ровно то, что GUI
-    планировщика разрешает создавать обычному пользователю.
-    ExecutionTimeLimit PT0S — без лимита 72 ч (демон живёт вечно).
-    Демон при установке не запускается."""
+    """The "Azoth Companion" task: starts at the current user's logon, no
+    administrator rights needed. Method 1 — the `schtasks /create /sc
+    onlogon` command (its trigger is "ANY logon" — on most machines it
+    requires admin); on refusal, method 2 — an XML registration: a
+    LogonTrigger for the current user only + InteractiveToken +
+    LeastPrivilege, i.e. exactly what the scheduler GUI lets a regular user
+    create. ExecutionTimeLimit PT0S — no 72 h limit (the daemon lives
+    forever). The daemon is not started at install time."""
     if sys.platform != "win32":
-        raise SystemExit("автозапуск через schtasks поддержан только на Windows")
+        raise SystemExit("autostart via schtasks is supported on Windows only")
     cmd = autostart_command()
     tr = subprocess.list2cmdline(cmd)
     code, out = _schtasks("/create", "/f", "/sc", "onlogon",
                           "/tn", AUTOSTART_TASK, "/tr", tr)
     if code == 0:
-        log("autostart: задача «%s» создана: %s" % (AUTOSTART_TASK, tr))
+        log("autostart: the task \"%s\" created: %s" % (AUTOSTART_TASK, tr))
         query_autostart()
         return
-    log("autostart: /sc onlogon отклонён (код %d: %s) — регистрирую через XML: "
-        "вход только текущего пользователя" % (code, out.strip()))
+    log("autostart: /sc onlogon rejected (code %d: %s) — registering via XML: "
+        "the current user's logon only" % (code, out.strip()))
     import os
     from xml.sax.saxutils import escape
     user = r"%s\%s" % (os.environ.get("USERDOMAIN", "."),
@@ -1557,155 +1584,155 @@ def install_autostart() -> None:
     xml_path = Path(__file__).resolve().parent / "logs" / "azoth-companion-task.xml"
     try:
         xml_path.parent.mkdir(parents=True, exist_ok=True)
-        xml_path.write_text(xml, encoding="utf-16")   # schtasks ждёт UTF-16
+        xml_path.write_text(xml, encoding="utf-16")   # schtasks expects UTF-16
     except OSError as e:
-        raise SystemExit("autostart: не записать XML задачи (%s): %s" % (xml_path, e))
+        raise SystemExit("autostart: cannot write the task XML (%s): %s" % (xml_path, e))
     code, out = _schtasks("/create", "/f", "/tn", AUTOSTART_TASK,
                           "/xml", str(xml_path))
     if code != 0:
-        log("autostart: НЕ удалось создать задачу «%s» (код %d): %s"
+        log("autostart: FAILED to create the task \"%s\" (code %d): %s"
             % (AUTOSTART_TASK, code, out.strip()))
         raise SystemExit(1)
-    log("autostart: задача «%s» создана (вход %s): %s"
+    log("autostart: the task \"%s\" created (the logon of %s): %s"
         % (AUTOSTART_TASK, user, tr))
     query_autostart()
 
 
 def uninstall_autostart() -> None:
     if sys.platform != "win32":
-        raise SystemExit("автозапуск через schtasks поддержан только на Windows")
+        raise SystemExit("autostart via schtasks is supported on Windows only")
     code, _ = _schtasks("/query", "/tn", AUTOSTART_TASK)
     if code != 0:
-        log("autostart: задача «%s» не существует — удалять нечего" % AUTOSTART_TASK)
+        log("autostart: the task \"%s\" does not exist — nothing to remove" % AUTOSTART_TASK)
         return
     code, out = _schtasks("/delete", "/f", "/tn", AUTOSTART_TASK)
     if code != 0:
-        log("autostart: НЕ удалось удалить задачу (код %d): %s"
+        log("autostart: FAILED to remove the task (code %d): %s"
             % (code, out.strip()))
         raise SystemExit(1)
-    log("autostart: задача «%s» удалена" % AUTOSTART_TASK)
+    log("autostart: the task \"%s\" removed" % AUTOSTART_TASK)
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(
         prog="azoth-companion",
-        description="Azoth Companion v0.3 — замена GearLink для ASUS ROG Azoth 96 HE "
-                    "(M901): набор виджетов на OLED (баннер/часы/батарея/"
-                    "мониторинг/KPS), метрики/слайдшоу и OSD качельки "
-                    "громкости. GearLink перед запуском закрыть "
-                    "(taskkill //IM GearLink* //F) — иначе NAK-качели. "
-                    "При останове (Ctrl+C, SIGTERM) динамические виджеты "
-                    "гасятся, баннер остаётся.")
+        description="Azoth Companion v0.3 — a GearLink replacement for the ASUS ROG Azoth 96 HE "
+                    "(M901): a set of OLED widgets (banner/clock/battery/"
+                    "monitoring/KPS), metrics/slideshow and the volume "
+                    "rocker OSD. Close GearLink before running "
+                    "(taskkill //IM GearLink* //F) — otherwise NAK ping-pong. "
+                    "On shutdown (Ctrl+C, SIGTERM) the dynamic widgets "
+                    "are turned off, the banner stays.")
 
-    g = ap.add_argument_group("виджеты (какие слоты включать; без флагов — только баннер)")
+    g = ap.add_argument_group("widgets (which slots to enable; without flags — the banner only)")
     g.add_argument("--banner", action="store_true",
-                   help="слот 0: баннер/music mode/кастомный битмап — статичен, "
-                        "демону не нужен")
+                   help="slot 0: the banner/music mode/a custom bitmap — static, "
+                        "the daemon is not needed")
     g.add_argument("--clock", action="store_true",
-                   help="слот 1: часы — синхронизация 0x63 на границе каждой минуты")
+                   help="slot 1: the clock — a 0x63 sync at the boundary of every minute")
     g.add_argument("--battery", action="store_true",
-                   help="слот 2: батарея ПК — пуш 0x64; --bat включает автоматически")
+                   help="slot 2: the PC battery — a 0x64 push; --bat enables it automatically")
     g.add_argument("--monitor", action="store_true",
-                   help="слот 3: двойной индикатор --metrics / слайдшоу; "
-                        "включается автоматически флагами контента "
+                   help="slot 3: the double indicator --metrics / slideshow; "
+                        "enabled automatically by the content flags "
                         "(--metrics/--slideshow/--monitor-items/--demo/--cpu/"
                         "--temp/--ram-val)")
     g.add_argument("--kps", action="store_true",
-                   help="слот 4: нативный KPS-счётчик (клавиш/с) — прошивка "
-                        "рисует сама, хост только включает слот")
+                   help="slot 4: the native KPS counter (keys/s) — the firmware "
+                        "draws it itself, the host only enables the slot")
 
-    g = ap.add_argument_group("рабочий цикл")
+    g = ap.add_argument_group("the working loop")
     g.add_argument("--interval", type=_positive_float, default=2.0,
-                   help="период опроса хоста в обычном режиме, с (по умолчанию 2)")
+                   help="the host polling period in the normal mode, s (default 2)")
     g.add_argument("--metrics", choices=("cpu-temp", "cpu-ram", "cpu"),
                    default=None,
-                   help="набор тайлов двойного индикатора без слайдшоу: "
-                        "usage+temp (по умолчанию; без сенсора — только usage), "
-                        "usage+RAM (эксперимент «DRAM0»), только usage; "
-                        "включает --monitor")
+                   help="the double indicator tile set without a slideshow: "
+                        "usage+temp (the default; without a sensor — usage only), "
+                        "usage+RAM (the \"DRAM0\" experiment), usage only; "
+                        "enables --monitor")
     g.add_argument("--start", type=int, choices=range(5), default=None,
-                   help="какой слот показать после настройки (по умолчанию — "
-                        "монитор, если включён, иначе первый включённый; слот "
-                        "должен быть в наборе виджетов)")
+                   help="which slot to show after the setup (by default — "
+                        "the monitor if enabled, otherwise the first enabled; "
+                        "the slot must be in the widget set)")
     g.add_argument("--brightness", type=int, metavar="0-100", default=None,
-                   help="переустановить яркость (по умолчанию НЕ трогать)")
+                   help="re-set the brightness (by default leave it untouched)")
     g.add_argument("--keep-awake", action="store_true",
-                   help="будить OLED `65 FF` раз в 60 с")
+                   help="wake the OLED with `65 FF` every 60 s")
     g.add_argument("--no-clock", action="store_true",
-                   help="не синхронизировать время")
+                   help="do not sync the time")
 
-    g = ap.add_argument_group("слайдшоу (одиночные тайлы 0x66 с echo=0, как GearLink)")
+    g = ap.add_argument_group("slideshow (single 0x66 tiles with echo=0, like GearLink)")
     g.add_argument("--slideshow", type=_positive_float, metavar="SEC", default=None,
-                   help="листать слайды каждые SEC секунд (набор — "
-                        "--monitor-items, по умолчанию cpu.usage,ram.usage,"
-                        "cpu.freq); свайп вниз листает вручную и ставит "
-                        "автолистание на паузу 5 с; включает --monitor")
-    g.add_argument("--monitor-items", default=None, metavar="ИСТ.МЕТРИКА[,…]",
-                   help="слайды через запятую, формат «источник.метрика» — "
-                        "сетка конфига GearLink: источники cpu/gpu/ram, "
-                        "метрики usage/temp/freq/volt/fan, например cpu.usage,"
-                        "cpu.freq,ram.usage,gpu.temp; ram рисуется заголовком "
-                        "«DRAM0» (0x30), gpu — «GPU0» (0x10); сенсорные слайды "
-                        "(все temp/freq/volt и gpu.usage) требуют запущенный "
-                        "LibreHardwareMonitor — без сенсора слайд пропускается "
-                        "с предупреждением; короткие имена (cpu, ram, freq, "
-                        "temp, volt) тоже принимаются; --monitor-items без "
-                        "--slideshow включает слайдшоу с периодом 2 с "
-                        "(бывш. --slides)")
+                   help="page the slides every SEC seconds (the set — "
+                        "--monitor-items, the default cpu.usage,ram.usage,"
+                        "cpu.freq); a swipe down pages manually and puts "
+                        "the auto-paging on a 5 s pause; enables --monitor")
+    g.add_argument("--monitor-items", default=None, metavar="SRC.METRIC[,…]",
+                   help="comma-separated slides, the \"source.metric\" format — "
+                        "the GearLink config grid: the sources cpu/gpu/ram, "
+                        "the metrics usage/temp/freq/volt/fan, e.g. cpu.usage,"
+                        "cpu.freq,ram.usage,gpu.temp; ram is drawn with the "
+                        "\"DRAM0\" header (0x30), gpu — \"GPU0\" (0x10); the sensor "
+                        "slides (all temp/freq/volt and gpu.usage) require a "
+                        "running LibreHardwareMonitor — without a sensor the "
+                        "slide is skipped with a warning; the short names "
+                        "(cpu, ram, freq, temp, volt) are accepted too; "
+                        "--monitor-items without --slideshow enables a "
+                        "slideshow with a 2 s period (formerly --slides)")
 
-    g = ap.add_argument_group("ручные значения (тесты без сенсоров)")
+    g = ap.add_argument_group("manual values (tests without sensors)")
     g.add_argument("--cpu", type=int, metavar="0-100", default=None,
-                   help="ручное значение CPU %% (слайд cpu.usage и --metrics; "
-                        "включает --monitor)")
+                   help="a manual CPU %% value (the cpu.usage slide and --metrics; "
+                        "enables --monitor)")
     g.add_argument("--temp", type=int, default=None,
-                   help="ручная температура °C (слайд cpu.temp и --metrics "
-                        "cpu-temp; включает --monitor)")
+                   help="a manual temperature °C (the cpu.temp slide and --metrics "
+                        "cpu-temp; enables --monitor)")
     g.add_argument("--ram-val", type=int, metavar="0-100", default=None,
-                   help="ручное значение RAM %% (слайд ram.usage и --metrics "
-                        "cpu-ram; включает --monitor)")
+                   help="a manual RAM %% value (the ram.usage slide and --metrics "
+                        "cpu-ram; enables --monitor)")
     g.add_argument("--bat", type=int, metavar="0-100", default=None,
-                   help="ручное значение батареи ПК %% (включает --battery)")
+                   help="a manual PC battery %% value (enables --battery)")
 
-    g = ap.add_argument_group("громкость (OSD качельки)")
+    g = ap.add_argument_group("volume (the rocker OSD)")
     g.add_argument("--vol-hz", type=_positive_float, default=12.0, metavar="HZ",
-                   help="частота пушей OSD внутри окна серии качельки, Гц "
-                        "(live-калибровка 2026-10-05: OSD непрерывно обновляется "
-                        "при интервале >=50 мс; 40 мс и ниже — фриз/блинк, "
-                        "поэтому значения выше 20 Гц ограничиваются; дефолт 12 — "
-                        "с запасом)")
+                   help="the OSD push rate inside the rocker series window, Hz "
+                        "(live calibration 2026-10-05: the OSD updates continuously "
+                        "at an interval >=50 ms; 40 ms and below — a freeze/blink, "
+                        "so the values above 20 Hz are capped; the default 12 has "
+                        "a margin)")
     g.add_argument("--no-volume", action="store_true",
-                   help="не слушать качельку и не пушить OSD громкости "
-                        "(например, если аудиоустройство недоступно)")
+                   help="do not listen to the rocker and do not push the volume "
+                        "OSD (e.g. if the audio device is unavailable)")
 
-    g = ap.add_argument_group("разовые режимы и диагностика")
+    g = ap.add_argument_group("one-shot modes and diagnostics")
     g.add_argument("--once", action="store_true",
-                   help="настроить и вытолкнуть значения один раз, без цикла")
+                   help="set up and push the values once, no loop")
     g.add_argument("--status", action="store_true",
-                   help="только показать статус устройства и хоста (read-only)")
+                   help="only show the device and host status (read-only)")
     g.add_argument("--demo", action="store_true",
-                   help="тест сенсоров: CPU-тайл бегает 0→100→0 (~5.5 с в сторону), "
-                        "интервал пуша 0.4 с; включает --monitor")
+                   help="a sensor test: the CPU tile runs 0→100→0 (~5.5 s each way), "
+                        "the push interval 0.4 s; enables --monitor")
     g.add_argument("--events", action="store_true",
-                   help="слушать iface2 (смена слота/статус виджета) и писать в лог")
+                   help="listen to iface2 (slot changes/widget status) and write to the log")
     g.add_argument("--evt-dump", action="store_true",
-                   help="дампить все фреймы 0xFFC0 (03 71/93/95/96) и журнал "
-                        "транзакций (TXLOG) в лог")
+                   help="dump all the 0xFFC0 frames (03 71/93/95/96) and the "
+                        "transaction log (TXLOG) into the log")
 
-    g = ap.add_argument_group("лог-файл и автозапуск")
+    g = ap.add_argument_group("log file and autostart")
     g.add_argument("--log-file", nargs="?", const="", default=None, metavar="PATH",
-                   help="дублировать лог в файл, UTF-8, ротация ~2 МБ × 3 файла; "
-                        "без PATH — logs/azoth-companion.log рядом с azoth-companion.py")
+                   help="mirror the log into a file, UTF-8, a ~2 MB rotation × 3 files; "
+                        "without PATH — logs/azoth-companion.log next to azoth-companion.py")
     g.add_argument("--install-autostart", action="store_true",
-                   help="создать задачу планировщика «Azoth Companion» (запуск при логоне "
-                        "текущего пользователя через pythonw — без консольного "
-                        "окна; флаги демона: --clock --battery --monitor "
-                        "--slideshow 2 --log-file); права администратора не "
-                        "нужны; демон сейчас не запускается")
+                   help="create the \"Azoth Companion\" scheduler task (a start at the "
+                        "logon of the current user via pythonw — without a console "
+                        "window; the daemon flags: --clock --battery --monitor "
+                        "--slideshow 2 --log-file); no administrator rights "
+                        "needed; the daemon is not started now")
     g.add_argument("--uninstall-autostart", action="store_true",
-                   help="удалить задачу планировщика «Azoth Companion»")
+                   help="remove the \"Azoth Companion\" scheduler task")
     args = ap.parse_args()
 
-    if args.log_file is not None:        # "" = --log-file без значения → путь по умолчанию
+    if args.log_file is not None:        # "" = --log-file without a value → the default path
         setup_log_file(args.log_file)
     if args.install_autostart:
         install_autostart()
@@ -1714,8 +1741,9 @@ def main() -> None:
         uninstall_autostart()
         return
 
-    # Флаги контента включают свой виджет сами (как --slides раньше включал
-    # слайдшоу): метрики/слайды/демо → монитор, --bat → батарея.
+    # The content flags enable their widget themselves (as --slides used to
+    # enable the slideshow): the metrics/slides/demo → the monitor, --bat →
+    # the battery.
     if (args.metrics is not None or args.slideshow is not None
             or args.monitor_items is not None or args.demo
             or args.cpu is not None or args.temp is not None
@@ -1724,14 +1752,14 @@ def main() -> None:
     if args.bat is not None:
         args.battery = True
     if args.metrics is None:
-        args.metrics = "cpu-temp"        # умолчание --metrics (уже после импликации)
+        args.metrics = "cpu-temp"        # the --metrics default (already after the implication)
     items_given = args.monitor_items is not None   # parse_monitor_items(None)
-    args.monitor_items = parse_monitor_items(args.monitor_items)  # вернёт умолчание
+    args.monitor_items = parse_monitor_items(args.monitor_items)  # returns the default
     if items_given and args.slideshow is None:
-        args.slideshow = DEFAULT_SLIDESHOW_S   # --monitor-items включает слайдшоу
+        args.slideshow = DEFAULT_SLIDESHOW_S   # --monitor-items enables the slideshow
     if args.start is not None and args.start not in enabled_slots(args):
-        raise SystemExit("--start %d: слот не включён (набор: %s) — добавь "
-                         "соответствующий флаг виджета (--banner/--clock/"
+        raise SystemExit("--start %d: the slot is not enabled (the set: %s) — add "
+                         "the corresponding widget flag (--banner/--clock/"
                          "--battery/--monitor/--kps)"
                          % (args.start, ", ".join(
                              "%d %s" % (s, WIDGET_NAMES[s])
@@ -1742,13 +1770,13 @@ def main() -> None:
         kbd = M901()
     except Exception as e:
         if args.status or args.once:
-            raise SystemExit("клавиатура не найдена: %s\n"
-                             "(USB подключён? GearLink закрыт? pip install hidapi)" % e)
-        log("клавиатура не найдена (%s)" % e)
+            raise SystemExit("keyboard not found: %s\n"
+                             "(is the USB plugged in? is GearLink closed? pip install hidapi)" % e)
+        log("keyboard not found (%s)" % e)
         kbd = wait_reconnect()
-        if kbd is None:                  # останов по сигналу, пока ждали
+        if kbd is None:                  # stopped by a signal while waiting
             return
-    log("подключено: %s" % kbd.dev.get_product_string())
+    log("connected: %s" % kbd.dev.get_product_string())
     daemon = not (args.status or args.once)
     try:
         if args.status:
@@ -1763,23 +1791,23 @@ def main() -> None:
                         run(kbd, args)
                         break
                     except OSError as e:
-                        # USB-линк умер (перечисление, глюк драйвера, выдёргивание)
-                        log("устройство пропало (%s)" % e)
+                        # the USB link died (re-enumeration, a driver glitch, unplugging)
+                        log("the device disappeared (%s)" % e)
                         try:
                             kbd.close()
                         except Exception:
                             pass
                         kbd = wait_reconnect()
-                        if kbd is None:  # останов по сигналу, пока ждали
+                        if kbd is None:  # stopped by a signal while waiting
                             break
-            except KeyboardInterrupt:    # Ctrl+C: SIGINT не перекрыт обработчиком
-                log("остановлено пользователем (Ctrl+C)")
+            except KeyboardInterrupt:    # Ctrl+C: SIGINT is not overridden by a handler
+                log("stopped by the user (Ctrl+C)")
     finally:
         if daemon:
             if _stop_signal:
-                log("останов по сигналу %s" % _stop_signal)
+                log("stopped by the signal %s" % _stop_signal)
             try:
-                shutdown_widgets(kbd)    # погасить всё, кроме баннера
+                shutdown_widgets(kbd)    # turn off everything except the banner
             except Exception:
                 pass
         try:

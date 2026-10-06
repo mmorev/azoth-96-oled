@@ -1,496 +1,544 @@
-# Azoth Companion v0.3 — прототип замены GearLink
+# Azoth Companion v0.3 — a GearLink replacement prototype
 
-**Файл:** `azoth-companion.py` (транспорт — `analysis/m901_client.py`).
-**Обновлено:** 2026-10-05 (v0.3: `--slides`, `--log-file`, автозапуск; протокольная
-логика не менялась). Предыдущие итоги — 2026-10-04, захваты GearLink
+**File:** `azoth-companion.py` (transport — `analysis/m901_client.py`).
+**Updated:** 2026-10-05 (v0.3: `--slides`, `--log-file`, autostart; the protocol
+logic is unchanged). Previous findings — 2026-10-04, GearLink captures
 (`C:/azoth-capture/16-gearlink-startup.pcap`, `18-gearlink-minimal.pcap`).
 
-## Модель протокола (выверена живой сессией + захватами)
+## The protocol model (verified against a live session + captures)
 
-| Виджет | Слот | Контент | Команда |
+| Widget | Slot | Content | Command |
 |---|---|---|---|
-| Часы | 1 | дата+время; циферблат тикает сам | `63 00 <echo> 00 <date u32 LE> <time u16 LE>` — пуш при старте, ре-синк раз в 10 мин |
-| Батарея ПК | 2 | проценты | `64 00 <echo> <pct> 00` — пуш при изменении |
-| CPU-мониторинг | 3 | пары {sel, digit, u16} | `66 00 01 00 <selA digA valA u16> <selB digB valB u16>` — пуш при изменении |
-| Баннер/music | 0 | GearLink-стрим кадров | `67 00 02 01 <w u16> <h u16> <param>` → `67 01` чанки → `67 02` ~16 fps — **прототип не использует** |
-| Карусель | 4 | см. «Слот 4 — что выяснилось» | не трогаем |
+| Clock | 1 | date+time; the dial ticks by itself | `63 00 <echo> 00 <date u32 LE> <time u16 LE>` — a push at startup, a re-sync every 10 min |
+| PC battery | 2 | percent | `64 00 <echo> <pct> 00` — a push on change |
+| CPU monitoring | 3 | {sel, digit, u16} pairs | `66 00 01 00 <selA digA valA u16> <selB digB valB u16>` — a push on change |
+| Banner/music | 0 | the GearLink frame stream | `67 00 02 01 <w u16> <h u16> <param>` → `67 01` chunks → `67 02` ~16 fps — **not used by the prototype** |
+| Carousel | 4 | see "Slot 4 — what was learned" | leave alone |
 
-Селекторы `0x66`: hi-ниббл = заголовок (0=CPU, 1=GPU, 2=VRM, 3=DRAM, 4=CHA),
-lo-ниббл = подпись (0=Usage, 1=Temp., 2=Freq., 5=Volt). GearLink пушит только CPU:
-одинарный `{01 00 <freq>}`/двойной `{00 00 <usage> | 01 00 <temp>}`.
+The `0x66` selectors: the hi-nibble = the header (0=CPU, 1=GPU, 2=VRM, 3=DRAM, 4=CHA),
+the lo-nibble = the label (0=Usage, 1=Temp., 2=Freq., 5=Volt). GearLink pushes only the CPU:
+a single `{01 00 <freq>}` / a double `{00 00 <usage> | 01 00 <temp>}`.
 
-### Одинарные виджеты — как делает GearLink (захват 19, 2026-10-04)
+### Single widgets — the GearLink way (capture 19, 2026-10-04)
 
-Сценарий «переключил двойной CPU+temp на одинарный» в трафике:
+The "switched the double CPU+temp to a single one" scenario in the traffic:
 
 ```
-6a 00 00 00 03 00     выключить слот 3 (двойной)
-6a 00 00 00 04 01     включить слот 4 (карусель)
-6a 01 00 00 04 00     выбрать слот 4
-68 00 00 00 64        яркость
+6a 00 00 00 03 00     disable slot 3 (the double one)
+6a 00 00 00 04 01     enable slot 4 (the carousel)
+6a 01 00 00 04 00     select slot 4
+68 00 00 00 64        brightness
 50 55 00 00           commit
 ```
 
-- **Пушей 0x66 после переключения НЕТ** — одинарный тайл рендерит уже лежащие
-  в таблице записи (после двойного usage+temp на экране остался «CPU0 Temp»).
-  Отдельной команды «одинарный режим» в протоколе нет.
-- Смена типа виджета «двойной → одинарный» без переподключения клавиатуры
-  проходила тяжело даже у GearLink (повторные дёрганья слотов 3↔4 в t=43..104 c);
-  пользователь решил переподключением USB.
-- Свайпы на этом слоте не работали — гейт от `65 FF` (wake), штатно и у GearLink.
-- Бонус-находка в захвате (t=106): вид «кастомная картинка» = слоты {0 вкл,
-  1-3 выкл, 4 вкл}, select 0, `61 00 01` (страница 1), **`51 60 3F 00`** (маска
-  статус-бара в sysctrl, mode 0x14) + `6B 00` (begin bitmap) — первый живой
-  пример использования `51 60`.
-- KPS-счётчик (key presses/sec) — нативный тайл карусели, хостом не управляется.
+- **There are NO 0x66 pushes after the switch** — the single tile renders the
+  records already stored in the table (after the double usage+temp the screen
+  kept showing "CPU0 Temp"). There is no separate "single mode" command in the
+  protocol.
+- Switching the widget type "double → single" without reconnecting the
+  keyboard went rough even for GearLink (repeated slot 3↔4 flapping at
+  t=43..104 s); the user resolved it by re-plugging the USB.
+- Swipes on that slot did not work — gated by `65 FF` (wake), normal for
+  GearLink as well.
+- A bonus find in the capture (t=106): the "custom picture" view = slots
+  {0 on, 1-3 off, 4 on}, select 0, `61 00 01` (page 1), **`51 60 3F 00`**
+  (the status-bar mask in sysctrl, mode 0x14) + `6B 00` (begin bitmap) —
+  the first live example of `51 60` being used.
+- The KPS counter (key presses/sec) is a native carousel tile; the host
+  does not control it.
 
-### Геометрия тайлов 0x66 — эксперимент с пробами (2026-10-04, сессия 2)
+### 0x66 tile geometry — a probe experiment (2026-10-04, session 2)
 
-Пробы с опознавательными значениями в разных позициях пуша (11/22 во второй
-паре, 33/44 в первой, sel 0x30 в обоих случаях) показали:
+Probes with recognizable values in different positions of the push (11/22 in
+the second pair, 33/44 in the first, sel 0x30 in both cases) showed:
 
-- **Тайлы привязаны к типу (селектору), а не к позиции пары в пушe**: DRAM0
-  отрендерился одним и тем же тайлом независимо от позиции; нейтральная пара
-  `{00 00 0000}` — всегда «CPU0 Usage 0» второй клеткой.
-- **Мониторинговая раскладка всегда двухтайльная**. «Одинарный» режим GearLink —
-  это второй тайл с нулями (страницы карусели выбирают, какая метрика живая).
-- Следствие: «слайдшоу одинарных» через 0x66 невозможно; осмысленные режимы —
-  `--metrics cpu-ram` (обе клетки живые, рекомендуемый) или чередование метрик
-  на верхнем тайле с нулём внизу (как GearLink в захвате 12).
-- Истинно одиночный тайл = отдельный механизм карусели (страницы 0..4,
-  RAM @0x23019014) — вне хост-протокола 0x66, перспектива отдельного RE.
+- **Tiles are bound to the type (selector), not to the pair's position in the
+  push**: DRAM0 rendered with the same tile regardless of position; the
+  neutral pair `{00 00 0000}` always shows up as "CPU0 Usage 0" in the second
+  cell.
+- **The monitoring layout is always two tiles.** GearLink's "single" mode is
+  a second tile with zeros (the carousel pages pick which metric is live).
+- Consequence: a "slideshow of singles" via 0x66 is impossible; the sensible
+  modes are `--metrics cpu-ram` (both cells live, recommended) or alternating
+  metrics on the top tile with a zero below (as GearLink does in capture 12).
+- A truly single tile is a separate carousel mechanism (pages 0..4,
+  RAM @0x23019014) — outside the 0x66 host protocol, a subject for separate RE.
 
-### Mac/PC — статус
+### Mac/PC — status
 
-В разобранном протоколе команды mac/pc НЕТ. Кандидаты на хранение режима:
-биты байта `[0x2301D27E]` (пары иконок статус-бара 0/1, 2/3, 4/5 — одна из них
-mac/pc; писатели — RAM-код), `51 21/22`, сервисный канал iface1 0xFFC0.
-План: захват переключателя Mac/PC в GearLink UI (если есть) — команда проявится
-в трафике. Авто-смена на Mac: прототип переносим (hidapi кроссплатформенный,
-WRITE_PREFIX уже платформенный) — Mac-агент сам выставит режим при коннекте.
+The reverse-engineered protocol has NO mac/pc command. Candidates for where
+the mode is stored: the bits of byte `[0x2301D27E]` (the status-bar icon pairs
+0/1, 2/3, 4/5 — one of them is mac/pc; the writers are RAM code),
+`51 21/22`, the iface1 service channel 0xFFC0.
+Plan: capture the Mac/PC switch in the GearLink UI (if it exists) — the
+command will show up in the traffic. Auto-switching on Mac: the prototype
+carries over (hidapi is cross-platform, WRITE_PREFIX is already
+per-platform) — the Mac agent will set the mode itself on connect.
 
-### Слайдшоу и карусель — как на самом деле (захват 20 + живые тесты 2026-10-04)
+### Slideshow and carousel — how it actually works (capture 20 + live tests 2026-10-04)
 
-- Слайдшоу GearLink = одиночные пуши `0x66` с чередованием селекторов
-  (Usage ↔ Temp, каждые ~1-3 c), **без** смены слотов/страниц. Наш `--slideshow`
-  — тот же механизм байт-в-байт.
-- **КРИТИЧНО: у `0x66` два пути по echo** (STATUSBAR §4, подтверждено живым
-  тестом): `echo=1` → путь `0x0E08D65A` — «шумный»: каждый пуш возвращает
-  карусель слота 4 на первую страницу (двойной тайл) и «съедает» свайпы;
-  `echo=0` → тихий IPC `0x1E` — контент обновляется, карусель стоит на месте.
-  Слайдшоу-пуши GearLink идут с `echo=0` (захват 20), конфиг-пуши — с `echo=1`.
-  Наш `push_metrics()` по умолчанию шлёт с `echo=0`.
-- Страницы карусели (2 одинарных + двойной) читают ОДНУ таблицу тайлов: значения
-  обновляются на всех страницах сразу. Карусель листается только свайпами
-  (локально, хост-команды страницы нет).
-- FD `A2 <v>` («переключение режима» из реверса, `[0x2301D26C]=v`) — эффекта на
-  экране/статус-баре при v=0/1 НЕТ. Не mac/pc.
-- **Mac/PC — полностью внутреннее состояние клавиатуры**: Fn+Tab не генерирует
-  ни одного USB-пакета; regwatch (дифф всех геттеров 0x12/21/23/24/25/27 при
-  нажатиях) показал изменения только в дрейфующем байте RSSI/напряжения
-  (`12.01` payload[7], зубцы 0x18–0x2D). Хост-протокола на mac/pc нет — режим
-  хранится в клавиатуре и переживает переподключения; прототипу трогать нечего.
-- Дисплей засыпает по своему таймауту, если никто не пушит: спящий экран
-  «глотает» свайпы и тайлы замирают. Работающий прототип кормит экран постоянно
-  (значения обновляются каждые ~2 c) — поэтому при остановленном прототипе
-  карусель выглядит мёртвой. Стартовый `65 FF` взводит гейт жестов на ~30–60 c
-  (как у GearLink) — свайпы оживают после его распада.
-  ⚠ По коду наоборот (`PROTOCOL_GESTURES.md` §2.5): `65 FF` (v>2) гейт СНИМАЕТ,
-  `65` с v≤2 — ставит; наблюдаемое «глухое окно» — хвост диспетчера при пробуждении
-  экрана. Живой тест: после «глухого окна» послать `65 FF` — свайпы должны ожить
-  мгновенно.
+- GearLink's slideshow = single `0x66` pushes with alternating selectors
+  (Usage ↔ Temp, every ~1-3 s), **without** slot/page changes. Our
+  `--slideshow` is the same mechanism, byte for byte.
+- **CRITICAL: `0x66` has two paths depending on echo** (STATUSBAR §4,
+  confirmed by a live test): `echo=1` → the path `0x0E08D65A` — "noisy":
+  every push snaps the slot 4 carousel back to the first page (the double
+  tile) and "eats" swipes; `echo=0` → the quiet IPC `0x1E` — the content
+  updates, the carousel stays where it is. GearLink's slideshow pushes go
+  with `echo=0` (capture 20), the config pushes with `echo=1`.
+  Our `push_metrics()` sends with `echo=0` by default.
+- The carousel pages (2 singles + the double) read ONE tile table: the values
+  update on all pages at once. The carousel is paged only by swipes
+  (locally; there is no host page command).
+- FD `A2 <v>` ("mode switch" from the reverse engineering, `[0x2301D26C]=v`)
+  — no effect on the screen/status bar at v=0/1. Not mac/pc.
+- **Mac/PC is fully keyboard-internal state**: Fn+Tab generates not a single
+  USB packet; regwatch (a diff of all the 0x12/21/23/24/25/27 getters across
+  presses) showed changes only in the drifting RSSI/voltage byte
+  (`12.01` payload[7], the 0x18–0x2D sawteeth). There is no host protocol for
+  mac/pc — the mode is stored in the keyboard and survives reconnects;
+  there is nothing for the prototype to touch.
+- The display falls asleep on its own timeout if nobody pushes: the sleeping
+  screen "swallows" swipes and the tiles freeze. A working prototype feeds
+  the screen continuously (the values update every ~2 s) — that is why, with
+  the prototype stopped, the carousel looks dead. The startup `65 FF` arms
+  the gesture gate for ~30–60 s (like GearLink) — the swipes come back to
+  life after it decays.
+  ⚠ Per the code it is the other way around (`PROTOCOL_GESTURES.md` §2.5):
+  `65 FF` (v>2) CLEARS the gate, `65` with v≤2 sets it; the observed "dead
+  window" is the dispatcher tail while the screen wakes up. Live test: after
+  the "dead window", send `65 FF` — the swipes should revive instantly.
 
-### Канал iface2 — правильный слушатель и карта событий (evtlog, 2026-10-04)
+### The iface2 channel — the right listener and the event map (evtlog, 2026-10-04)
 
-- **На Windows у iface2 три коллекции с разными device-path'ами** (Col01
-  consumer 0x0C, Col02 system control, Col03 vendor 0xFFC0). `open_consumer`
-  открывает Col01, а весь зеркальный стрим событий живёт на **Col03 (0xFFC0)**.
-  Инструмент: `analysis/evtlog.py` (слушает оба).
-- Карта событий `03 <type> ...` (report ID 3):
-  - `03 95 00 00 30` — heartbeat состояния виджетов (~0.86 с; во время свайпов
-    замирает и восстанавливается через ~5 с);
-  - `03 96 00 00 <slot<<4|флаги>` — свайп ВНИЗ (отправляется только им — потому
-    и виден на шине);
-  - `03 94` — дабл-тап тачскрина; `03 93 00 00 <slot>` — смена слота
-    (ВЛЕВО/ВПРАВО);
-  - `03 71` — зеркало состояния клавиш (битмап, байт 2 = модификаторы:
-    04 = LAlt во время Alt+Tab); спорадические всплески = касания клавиш
-    ладонью. Ранняя гипотеза «поток тачскрина» НЕ подтвердилась (2026-10-05).
-  (уточнение карты 2026-10-05 по `PROTOCOL_GESTURES.md`; раньше 95/96 считались
-  одним «зеркалом состояния ~1.5 Гц»).
-- **Вертикальные свайпы «нестабильны» — объяснено (2026-10-05)**: свайп ВНИЗ
-  стабильно даёт `0396`; ВВЕРХ шлёт 0x95, байт-в-байт равный heartbeat, и хостом
-  не выделяем вообще. «Часть свайпов дала 0x93» — вбок ушедшие жесты. Слайдшоу
-  по таймеру делает вертикальные свайпы необязательными.
+- **On Windows iface2 has three collections with different device paths**
+  (Col01 consumer 0x0C, Col02 system control, Col03 vendor 0xFFC0).
+  `open_consumer` opens Col01, while the whole mirrored event stream lives on
+  **Col03 (0xFFC0)**. Tool: `analysis/evtlog.py` (listens to both).
+- The event map of `03 <type> ...` (report ID 3):
+  - `03 95 00 00 30` — the widget-state heartbeat (~0.86 s; it freezes during
+    swipes and recovers after ~5 s);
+  - `03 96 00 00 <slot<<4|flags>` — a swipe DOWN (only it gets sent — that is
+    why it is visible on the bus);
+  - `03 94` — a touchscreen double-tap; `03 93 00 00 <slot>` — a slot change
+    (LEFT/RIGHT);
+  - `03 71` — a mirror of the key states (a bitmap; byte 2 = the modifiers:
+    04 = LAlt during Alt+Tab); sporadic bursts = palm touches on the keys.
+    The early "touchscreen stream" hypothesis was NOT confirmed (2026-10-05).
+  (the map was refined on 2026-10-05 per `PROTOCOL_GESTURES.md`; earlier 95/96
+  were considered one "state mirror ~1.5 Hz").
+- **"Vertical swipes are unreliable" — explained (2026-10-05)**: a swipe DOWN
+  reliably produces `0396`; UP sends 0x95, which is byte-for-byte identical
+  to the heartbeat and is not distinguished by the host at all. "Some swipes
+  gave 0x93" — gestures that slipped sideways. A timer-driven slideshow makes
+  the vertical swipes optional.
 
-### Направление свайпа — закрыто: хосту доступен только ВНИЗ (2026-10-05)
+### Swipe direction — settled: only DOWN is visible to the host (2026-10-05)
 
-Полные сессии с лабелированными свайпами (`analysis/dircam.py` — непрерывный
-ридер обоих каналов iface2 с ms-метками; логи `analysis/scan_swipe.log`,
+Full sessions with labeled swipes (`analysis/dircam.py` — a continuous reader
+of both iface2 channels with ms timestamps; the logs `analysis/scan_swipe.log`,
 `analysis/scan_up.log`):
 
-- **`03 96` = один принятый свайп ВНИЗ**: 10 вниз → 8 событий, 3 вниз → 3.
-  Payload константен (`00 00 30 00…`) — направления в нём нет.
-- **Свайп ВВЕРХ хостом не обнаружим**: чистая сессия >10 вверх → ноль
-  событий (ни 0396, ни 0394, ни 0371, ни consumer-фреймов) при живом
-  фоновом стриме 0395 ~1 Гц. Пользователь подтверждает UX: вниз листает,
-  вверх — нет. «Соседа» на проводе нет.
-- **Подтверждение на слоте 0 (гифки)**: сессия «8 вверх, 8 вниз, 8 вверх» →
-  ровно 8× `0396` от СРЕДНЕЙ (нижней) группы (`scan_gif.log`); обе группы
-  вверх — ноль, хотя гифки локально листаются в обе стороны. Т.е. даже там,
-  где оба направления что-то делают на устройстве, хосту сообщает только вниз.
-  Байт 4 в `0396` = контекст слота/страницы: `30` — мониторинг, `00` —
-  баннер/гифки, `20` видел в ранней сессии.
-- Стрим `0395` замирает на время жестового взаимодействия и возобновляется
-  ~5 с после последнего принятого свайпа (удобный маркер «живого» окна).
-  Первые свайпы после простоя уходят молча (wake-гейт) — ни одного фрейма.
-- Захват 20 (GL): 01-фреймы на Col01 = зеркало HID-usages (`04 00 2b` =
-  Alt+Tab, 0x05-0x39 = клавиши), `0361/0372` = Fn-комбо (Fn+Tab), `0394` —
-  дважды, семантика неизвестна (логируется прототипом на будущее).
-- Регистра «последний жест» нет: `analysis/swipereg.py` (опрос 12.00-0x1F,
-  0x20-0x2B во время свайпов) — меняются только батарейные байты.
+- **`03 96` = one accepted swipe DOWN**: 10 down → 8 events, 3 down → 3.
+  The payload is constant (`00 00 30 00…`) — there is no direction in it.
+- **A swipe UP is undetectable by the host**: a clean session of >10 up →
+  zero events (no 0396, no 0394, no 0371, no consumer frames) while the
+  background 0395 stream at ~1 Hz was alive. The user confirms the UX:
+  down pages, up does not. There is no "neighbor" on the wire.
+- **Confirmation on slot 0 (gifs)**: the session "8 up, 8 down, 8 up" →
+  exactly 8× `0396` from the MIDDLE (lower) group (`scan_gif.log`); both
+  groups up — zero, even though the gifs page locally in both directions.
+  I.e. even where both directions do something on the device, only down is
+  reported to the host. Byte 4 of `0396` = the slot/page context: `30` —
+  monitoring, `00` — banner/gifs, `20` seen in an early session.
+- The `0395` stream freezes during gesture interaction and resumes ~5 s after
+  the last accepted swipe (a convenient marker of the "live" window). The
+  first swipes after an idle period go out silently (the wake gate) — not a
+  single frame.
+- Capture 20 (GL): the 01-frames on Col01 are a mirror of the HID usages
+  (`04 00 2b` = Alt+Tab, 0x05-0x39 = keys), `0361/0372` = the Fn combos
+  (Fn+Tab), `0394` — twice, semantics unknown (logged by the prototype for
+  the future).
+- There is no "last gesture" register: `analysis/swipereg.py` (polling
+  12.00-0x1F, 0x20-0x2B during swipes) — only the battery bytes change.
 
-**Кодовая расшифровка (2026-10-05, `analysis/PROTOCOL_GESTURES.md`) — уточняет всё
-выше:**
+**The decode from the code (2026-10-05, `analysis/PROTOCOL_GESTURES.md`) —
+refines everything above:**
 
-- ВВЕРХ обрабатывается полноценно (декодер mode 3 → слот 3 → 0x0E08D868), но шлёт
-  конверт IPC **0x95** — тот же тип и тот же колектор payload ({slot<<4|флаги,
-  sub}), что и периодический стрим 0395. Сигнатуры у жеста нет вовсе: кадр ВВЕРХ
-  байт-в-байт равен heartbeat (пост-анализ логов: EVT-96 во внем-Tick фазе,
-  «лишние» 0395 на шумном тикере 0.70–1.26 с невыделаемы). Это fw-асимметрия, не
-  потеря жестов; конфигом не включается. «Байт 4 = контекст слота» подтверждён
-  кодом: это `slot<<4|флаги` колектора (30/20/00 = слоты 3/2/0).
-- `0394` = **дабл-тап** тачскрина (0x0E08DB58): тоггл бит0 [0x23014B49] +
-  флеш-сейв + тот же колектор. Кандидат на «листание НАЗАД» в прототипе
-  (сейчас 0394 логируется и игнорируется); семантику бит0 проверить живьём
-  (кандидат «экран вкл/выкл»).
-- Карта направлений: ВВЕРХ=0x95, ВНИЗ=0x96, ВЛЕВО=слот+1 (`0393 <slot+1>`),
-  ВПРАВО=слот−1 (wrap 0→4). Вертикальные жесты на слоте 4 **сбрасывают** KPS-кольцо
-  @0x23019014 (0x0E093F58), а не листают его — «карусель» это график KPS тайла
-  слота 4, не страницы. Замирание стрима 0395 во время свайпов = жестовый тракт
-  монополизирует отправку (наблюдение выше с этим сходится).
-- Wake-гейт по коду: `65` с v≤2 **ставит** гейт [0x2301D249], с v>2 (в т.ч. наш
-  `65 FF`) — **снимает**; «глухие» первые свайпы после простоя — хвост диспетчера
-  при пробуждении экрана ([0x23002348]==0 → гейт=1). Против строки про «65 FF
-  взводит гейт» ниже — перепроверить живьём, по коду наоборот.
+- UP is fully processed (decoder mode 3 → slot 3 → 0x0E08D868), but it sends
+  the IPC envelope **0x95** — the same type and the same payload collector
+  ({slot<<4|flags, sub}) as the periodic 0395 stream. The gesture has no
+  signature whatsoever: an UP frame is byte-for-byte equal to the heartbeat
+  (a post-analysis of the logs: EVT-96 in the out-of-Tick phase, the "extra"
+  0395s on the noisy 0.70–1.26 s ticker are indistinguishable). This is a
+  firmware asymmetry, not lost gestures; it cannot be enabled by
+  configuration. "Byte 4 = the slot context" is confirmed by the code: it is
+  the collector's `slot<<4|flags` (30/20/00 = the slots 3/2/0).
+- `0394` = a touchscreen **double-tap** (0x0E08DB58): a toggle of bit0
+  [0x23014B49] + a flash save + the same collector. A candidate for
+  "paging BACK" in the prototype (currently 0394 is logged and ignored);
+  the bit0 semantics needs a live check (a candidate for "screen on/off").
+- The direction map: UP=0x95, DOWN=0x96, LEFT=slot+1 (`0393 <slot+1>`),
+  RIGHT=slot−1 (wrap 0→4). Vertical gestures on slot 4 **reset** the KPS ring
+  @0x23019014 (0x0E093F58) rather than paging it — the "carousel" is the KPS
+  graph of the slot 4 tile, not pages. The freezing of the 0395 stream during
+  swipes = the gesture path monopolizes sending (consistent with the
+  observation above).
+- The wake gate per the code: `65` with v≤2 **sets** the gate [0x2301D249],
+  with v>2 (including our `65 FF`) — **clears** it; the "deaf" first swipes
+  after an idle period are the dispatcher tail while the screen wakes up
+  ([0x23002348]==0 → gate=1). This contradicts the line about "65 FF arms the
+  gate" above — re-verify live; per the code it is the other way around.
 
-⇒ Azoth Companion: листание ТОЛЬКО вперёд по 0396 (exact GearLink). В прототипе:
-0396 → следующий слайд + пауза автолистания `SWIPE_PAUSE_S = 5` с.
+⇒ Azoth Companion: paging FORWARD only, driven by 0396 (exactly like
+GearLink). In the prototype: 0396 → the next slide + an auto-paging pause of
+`SWIPE_PAUSE_S = 5` s.
 
-### Качелька громкости — обработчик в демоне (2026-10-05)
+### The volume rocker — the handler in the daemon (2026-10-05)
 
-Разбор цикла: `analysis/PROTOCOL_VOLUME.md` §0–§2. Роли разделены: качелька шлёт
-consumer-события (`01 00 04/02 00` на Col01) — Windows МЕНЯЕТ громкость сама;
-GearLink лишь читает новое значение ОС и пушит `51 0C 00 00 [V]` (V = %,
-echo обязателен 0x0000 — OSD-ветка; echo=1 = write-only копия без OSD).
-Клавиатура рисует «V%» и сама гасит OSD через 1 с.
+The loop breakdown: `analysis/PROTOCOL_VOLUME.md` §0–§2. The roles are split:
+the rocker sends consumer events (`01 00 04/02 00` on Col01) — Windows
+CHANGES THE VOLUME ITSELF; GearLink merely reads the new OS value and pushes
+`51 0C 00 00 [V]` (V = %, the echo must be 0x0000 — the OSD branch;
+echo=1 = a write-only copy without an OSD). The keyboard draws "V%" and
+hides the OSD itself after 1 s.
 
-В демоне: тик = `03 72 01` (vol+) / `03 72 04` (vol−) на 0xFFC0; ридер-поток
-отдаёт тик воркеру немедленно, воркер пушит `51 0C` на КАЖДЫЙ тик с
-ПРЕДСКАЗАННЫМ значением «кэш ± 2%» (без ожидания Windows; фоновый поллер
-`WindowsVolume` ~10 Гц непрерывно сверяет кэш с ОС). Направление тика
-передаётся в воркер (`tick(up)`); неудавшийся пуш дожимается следующим
-проходом. Пуш тихий (без robust_push-будильника); transact под локом.
+In the daemon: a tick = `03 72 01` (vol+) / `03 72 04` (vol−) on 0xFFC0; the
+reader thread hands the tick to the worker immediately, and the worker pushes
+`51 0C` on EVERY tick with a PREDICTED "cache ± 2%" value (without waiting
+for Windows; the background `WindowsVolume` poller at ~10 Hz continuously
+reconciles the cache with the OS). The tick direction is passed to the worker
+(`tick(up)`); a failed push is retried by the next pass. The push is quiet
+(no robust_push wake-up); transact runs under the lock.
 
-**Блинк первой серии качельки** (серия экспериментов 2026-10-05, пользователь):
-- воспроизводится ВООБЩЕ БЕЗ хоста (демон остановлен) — это fallback самой
-  прошивки: если тик не подтверждён хостом быстро, она рисует собственный
-  индикатор переразметкой экрана;
-- GearLink его тоже имеет (рудимент: «очень короткий, глазом почти не
-  заметен»); после остановки GearLink блинк возвращается — «тёплое»
-  состояние тракта не сохраняется, его создаёт только мгновенная реакция
-  на каждый тик;
-- прогрев одиночным пушем `51 0C` на старте демона НЕ помогает;
-- сессия с TXLOG (журнал всех транзакций, мс): в момент блинка НОЛЬ NAK и
-  ноль таймаутов — все `51 0C` ACK'нулись за 1-2 мс, хост полностью чист;
-  гипотеза «какой-то NAK перезагружает дисплей» исключена;
-- hold качельки (авторипит без release-краёв `03 72 00`) НЕ мигает,
-  дискретные клики мигают → гаснение завязано на жестовый тракт прошивки
-  (края нажатий), дисплей на время кликовой серии приостановлен целиком
-  («загорается не раньше окончания burst»), это не попиксельное мерцание;
-- итого: строго прошивочная косметика; в Azoth Companion не лечится без декомпила
-  OSD-тракта sysctrl, влияние на UX минимально.
+**The blink of the first rocker series** (a series of experiments
+2026-10-05, the user):
+- it reproduces with NO host at all (the daemon stopped) — this is a
+  fallback of the firmware itself: if a tick is not acknowledged by the host
+  quickly enough, it draws its own indicator by re-laying out the screen;
+- GearLink has it too (a vestige: "very short, almost invisible to the
+  eye"); after stopping GearLink the blink comes back — the "warm" state of
+  the path is not preserved; only an instant reaction to every tick creates it;
+- warming up with a single `51 0C` push at daemon startup does NOT help;
+- a session with TXLOG (a log of all the transactions, ms): at the moment of
+  the blink there were ZERO NAKs and zero timeouts — all the `51 0C`s were
+  ACKed within 1-2 ms, the host is completely clean; the hypothesis "some
+  NAK reboots the display" is ruled out;
+- holding the rocker (auto-repeats without the release edges `03 72 00`) does
+  NOT blink, while discrete clicks do → the dimming is tied to the firmware's
+  gesture path (the press edges); during a click series the display is
+  suspended as a whole ("it lights up no earlier than the end of the
+  burst"), this is not per-pixel flicker;
+- bottom line: strictly a firmware cosmetic; it cannot be fixed in Azoth
+  Companion without decompiling the sysctrl OSD path; the UX impact is
+  minimal.
 
-**Hold и промежуточные значения** (2026-10-05): авто-репиты при удержании в
-зеркало НЕ шлются — ровно один `03 72` на press, тишина до release (дамп).
-Стрельба свежими значениями из ОС (окно 0.6 с, `--vol-hz`, дефолт 12) даёт
-точное финальное значение сразу после отпускания; промежуточных обновлений
-при hold — только первые 1-2, и это НЕ частотный предел (25 Гц и 12 Гц
-дают одинаковую картину «2 → … → 100%»).
-**Локализовано по декомпилу**: keyboard-сторона безупречна — ветка echo-0
-0x0E07DF8C дизассемблирована, единственный гейт [0x23000CA0] живо держится
-0, форматтер 0x0E08C4E4 и таймер 0x0E08C548 безусловны → IPC 0x26 (draw)
-уходит на КАЖДЫЙ пуш.
-**Наблюдение пользователя (длинный hold)**: композитор НЕ стоит — при
-долгом удержании OSD-слой исчезает, а выбранный виджет (монитор/гифка/KPS)
-продолжает рендериться. Т.е. sysctrl принимает draw'ы, но OSD-слой после
-первых 1-2 кадров скрывается и до конца эпизода не показывается; финальный
-кадр отрисовывается на отпускании (эпизод сбрасывает состояние слоя).
-Механика show/hide/suppress OSD-слоя — в недекомпилированном потребителе
-IPC 0x26/0x16 на sysctrl (см. prompts/05-sysctrl-osd.md).
+**Hold and intermediate values** (2026-10-05): auto-repeats while held are
+NOT sent to the mirror — exactly one `03 72` per press, silence until
+release (the dump). Firing fresh OS values (a 0.6 s window, `--vol-hz`,
+the default 12) yields the exact final value right after the release; during
+a hold there are only the first 1-2 intermediate updates, and this is NOT a
+rate limit (25 Hz and 12 Hz give the same "2 → … → 100%" picture).
+**Localized via the decompile**: the keyboard side is flawless — the echo-0
+branch at 0x0E07DF8C was disassembled, the only gate [0x23000CA0] is held
+live at 0, the formatter 0x0E08C4E4 and the timer 0x0E08C548 are
+unconditional → the IPC 0x26 (draw) goes out on EVERY push.
+**A user observation (a long hold)**: the composer does NOT stall — during a
+long hold the OSD layer disappears while the selected widget
+(monitor/gif/KPS) keeps rendering. I.e. sysctrl accepts the draws, but after
+the first 1-2 frames the OSD layer hides and does not show again until the
+end of the episode; the final frame is drawn on release (the episode resets
+the layer state). The show/hide/suppress mechanics of the OSD layer live in
+the not-yet-decompiled consumer of IPC 0x26/0x16 on sysctrl (see
+prompts/05-sysctrl-osd.md).
 
-**Unmute → OSD уровня** (фича, GL так не умеет): mute-клавиша идёт мимо
-зеркала iface2 (захват 04-mute: она выглядит обычной клавишей iface1), поэтому
-детектим СКАЧОК СОСТОЯНИЯ через Windows: поллер `WindowsVolume` 10 Гц читает
-GetMute (vtable 15) и на переходе muted→unmuted пушит `51 0C` с уровнем
-(`VolumeWorker.push_level`). 0% при mute — реальный ноль (0% ≠ mute в
-Windows); сама надпись «Mute/Unmute» на OLED — родной индикатор прошивки,
-наш пуш после unmute рисуется с «+» (почерк прошивки, корректно).
+**Unmute → a level OSD** (a feature GL cannot do): the mute key bypasses the
+iface2 mirror (capture 04-mute: it looks like a regular iface1 key), so we
+detect the STATE FLIP through Windows: the `WindowsVolume` 10 Hz poller reads
+GetMute (vtable 15) and, on the muted→unmuted transition, pushes `51 0C` with
+the level (`VolumeWorker.push_level`). 0% while muted is a real zero
+(0% ≠ mute in Windows); the "Mute/Unmute" caption on the OLED itself is the
+firmware's native indicator, and our push after unmute is drawn with a "+"
+(firmware handwriting, correct).
 
-**«Осадка» после серии** (hold-лаг): предсказанные значения кэша могут
-отстать от ОС при авторипите; через 0.3 с после последнего тика воркер
-доталкивает ТОЧНОЕ значение (`WindowsVolume.fresh()`, прямой COM-вызов) —
-финальная плашка всегда равна громкости ОС.
+**"Settling" after a series** (the hold lag): the predicted cache values may
+lag behind the OS during auto-repeat; 0.3 s after the last tick the worker
+pushes the EXACT value (`WindowsVolume.fresh()`, a direct COM call) — the
+final plate always equals the OS volume.
 
-### Сон дисплея и блинки — механика (2026-10-04)
+### Display sleep and blinks — the mechanics (2026-10-04)
 
-- Экран засыпает после ~30 тиков без **меняющих** данных: event-driven пуши
-  при стабильных значениях дают паузы, экран спит → дисплейная семья `0x61-67`
-  NAK'ает → блинк (чёрный кадр при пробуждении). GearLink не спит, потому что
-  его слайдшоу пушит гарантированно меняющиеся данные каждые 1-3 с.
-  Решение в прототипе: heartbeat `HEARTBEAT_S=10` (безусловный пуш) +
-  `robust_push` с РАЗЛИЧЕНИЕМ режимов отказа: настоящий NAK `FF AA` (спящий
-  гейт) → `65 FF`+`69`+ретрай (с коротким блинком, только по необходимости);
-  таймаут/тишина (девайс занят рендером) → тихая ретрия через 0.3 с без
-  будильника. Флаг режима отказа — `M901.last_nak` (ставится в transact).
-- Остаточные редкие блинки, по наблюдению пользователя, совпадают с
-  поминутным пушем `0x63` (полный перерендер текста часов) — плата за
-  точные часы; если будет мешать, вернем редкий синк.
-- **NAK ≠ «экран спит»** (уточнено 2026-10-05): `FF AA` приходит и на
-  ЗАНЯТОМ тракте — первый burst качельки монополизировал OSD-тракт,
-  параллельные пуши `0x66` NAK'ались всю серию, и старый robust_push
-  будил экран на каждый NAK → блинк длиной в серию. Правило: будить
-  (`65 FF`+`69`) только при NAK + ЯВНО выключенном экране (`0x23/02 == 0`,
-  `screen_is_on()`); NAK при включённом экране и таймауты = тихая ретрия.
-- **Анатомия «wake» по декомпилу (2026-10-05, проверка гипотезы «это
-  reset/reheal»)**: гипотеза НЕ подтвердилась, но вскрылась механика:
-  - хендлер `65` (case 0x65 мега-хендлера 0x0E08CE6C) — ТОЛЬКО IPC
-    `{0x1F, v}` + тоггл жестового гейта (v≤2 → [0x2301D249]=1 «жесты
-    есть», v>2 → =0); никаких дисплеевых операций;
-  - на sysctrl-синхронизаторе байт режима 0xFF = «ничего» — т.е. `65 FF`
-    для дисплейного конвейера NO-OP; настоящий СБРОС — режим >0x27
-    (нам недоступен, мы туда не пишем);
-  - реальный выключатель экрана — флаг [0x230086BC+0x513]: `69` ставит 1,
-    `61 01`/баннерные ветки ставят 0 (это и есть «засыпание»: гейт
-    мега-хендлера `[+0x513] != 1 → return 1` = наши NAK); синк-тик
-    0x0E08C800 при ИЗМЕНЕНИИ флага шлёт IPC `{0x11, флаг, u16}` — вот
-    подлинный носитель on/off до sysctrl (панель гасится/зажигается им);
-  - синк-тик ещё и самохилит: `[+0x513]==0 → =1` в одной из веток;
-  - чёрный кадр при пробуждении — переход панели 0→1 (перерендер/первый
-    кадр), а не сброс по команде. Вывод: `65 FF` полезен только снятием
-    жестового гейта, экран включает `69`.
-- Режим dim (снижение яркости от простоя) обновлениям НЕ мешает.
+- The screen falls asleep after ~30 ticks without **changing** data:
+  event-driven pushes at stable values leave gaps, the screen sleeps → the
+  display family `0x61-67` NAKs → a blink (a black frame on wake-up).
+  GearLink doesn't sleep because its slideshow pushes guaranteed-changing
+  data every 1-3 s. The prototype's solution: a heartbeat `HEARTBEAT_S=10`
+  (an unconditional push) + `robust_push` with DISTINGUISHED failure modes:
+  a real NAK `FF AA` (the sleep gate) → `65 FF`+`69`+retry (with a short
+  blink, only when necessary); a timeout/silence (the device is busy
+  rendering) → a quiet retry after 0.3 s without a wake-up. The failure-mode
+  flag is `M901.last_nak` (set in transact).
+- The residual rare blinks, per the user's observation, coincide with the
+  per-minute `0x63` push (a full re-render of the clock text) — the price of
+  an accurate clock; if it gets in the way, we'll return to the rare sync.
+- **NAK ≠ "the screen is asleep"** (refined 2026-10-05): `FF AA` also arrives
+  on a BUSY path — the first rocker burst monopolized the OSD path, the
+  parallel `0x66` pushes NAKed for the whole series, and the old robust_push
+  woke the screen on every NAK → a blink lasting the entire series. The
+  rule: wake (`65 FF`+`69`) only on a NAK + an EXPLICITLY off screen
+  (`0x23/02 == 0`, `screen_is_on()`); a NAK with the screen on, and
+  timeouts, = a quiet retry.
+- **The anatomy of "wake" per the decompile (2026-10-05, testing the "it's a
+  reset/reheal" hypothesis)**: the hypothesis was NOT confirmed, but the
+  mechanics surfaced:
+  - the `65` handler (case 0x65 of the mega-handler 0x0E08CE6C) — ONLY the
+    IPC `{0x1F, v}` + a toggle of the gesture gate (v≤2 →
+    [0x2301D249]=1 "gestures present", v>2 → =0); no display operations;
+  - on the sysctrl synchronizer, a mode byte of 0xFF = "nothing" — i.e.
+    `65 FF` is a NO-OP for the display pipeline; a real RESET is a mode >0x27
+    (unavailable to us, we never write there);
+  - the real screen switch is the flag [0x230086BC+0x513]: `69` sets it to 1,
+    `61 01`/the banner branches set it to 0 (this is exactly what "falling
+    asleep" is: the mega-handler gate `[+0x513] != 1 → return 1` = our NAKs);
+    the sync tick 0x0E08C800, upon a CHANGE of the flag, sends the IPC
+    `{0x11, flag, u16}` — that is the true carrier of on/off to sysctrl (the
+    panel is dimmed/lit by it);
+  - the sync tick also self-heals: `[+0x513]==0 → =1` in one of the branches;
+  - the black frame on wake-up is the panel's 0→1 transition (a re-render/the
+    first frame), not a reset by command. Conclusion: `65 FF` is useful only
+    through clearing the gesture gate; it is `69` that turns the screen on.
+- The dim mode (a brightness reduction from idle) does NOT interfere with
+  updates.
 
-### Слот 4 — что выяснилось (живой тест 2026-10-04)
+### Slot 4 — what was learned (live test 2026-10-04)
 
-- Гипотеза «слот 4 = одиночный тайл» **НЕ подтвердилась**: при выборе слота 4
-  экран показывает ту же двойную раскладку тайлов 0x66 + **нативный счётчик KPS**
-  (key presses per second — клавиатурная статистика, хостом не управляется).
-- Пуш одиночных пар 0x66 на слоте 4 меняет только ПЕРВЫЙ (верхний) тайл,
-  второй остаётся с предыдущим selB (наш «нейтральный» `{00 00 0000}` рендерится
-  как «CPU0 Usage 0»).
-- Подтверждено ранее: «DRAM0 Usage» (sel `0x30`) рендерится и ползает — RAM-виджет
-  работает на двойном тайле как вторая пара.
-- **Открытый вопрос на следующую сессию**: как GearLink рисовал одинарные
-  виджеты (захват 12: замерло на «CPU0 Usage 10%»)? Кандидаты: страницы карусели
-  (индекс 0..4 в RAM @0x23019014, писатели 0x0E093F58/0x0E093F9E — на слоте 4
-  листаются вертикальным свайпом) или рендер одиночной пары с «пустым» selB
-  (какой selB делает второй тайл пустым — перебор 0x?? при hi>4 запрещён
-  валидацией, но digit/значение можно обнулить).
-  ⚠ Поправка (2026-10-05, `PROTOCOL_GESTURES.md` §4): «карусель» @0x23019014 —
-  кольцо истории KPS тайла слота 4 (5 ячеек, IPC {0x25, total, max}), вертикальный
-  свайп на слоте 4 её СБРАСЫВАЕТ (0x0E093F58), не листает. Кандидат «страницы
-  карусели» для одинарных виджетов отпадает — остаётся «пустой selB» / параметры
-  второго тайла.
+- The hypothesis "slot 4 = a single tile" was **NOT confirmed**: when slot 4
+  is selected the screen shows the same double 0x66 tile layout + the
+  **native KPS counter** (key presses per second — keyboard statistics, not
+  host-controlled).
+- Pushing single 0x66 pairs on slot 4 changes only the FIRST (top) tile; the
+  second keeps the previous selB (our "neutral" `{00 00 0000}` renders as
+  "CPU0 Usage 0").
+- Confirmed earlier: "DRAM0 Usage" (sel `0x30`) renders and updates — the
+  RAM widget works on the double tile as the second pair.
+- **An open question for the next session**: how did GearLink draw single
+  widgets (capture 12: it froze on "CPU0 Usage 10%")? Candidates: the
+  carousel pages (an index 0..4 in RAM @0x23019014, the writers
+  0x0E093F58/0x0E093F9E — on slot 4 they are paged by a vertical swipe) or
+  rendering a single pair with an "empty" selB (which selB makes the second
+  tile empty — enumerating 0x?? is forbidden by validation when hi>4, but
+  the digit/value can be zeroed).
+  ⚠ A correction (2026-10-05, `PROTOCOL_GESTURES.md` §4): the "carousel"
+  @0x23019014 is the KPS history ring of the slot 4 tile (5 cells,
+  IPC {0x25, total, max}); a vertical swipe on slot 4 RESETS it (0x0E093F58)
+  rather than paging it. The "carousel pages" candidate for single widgets is
+  out — what remains is an "empty selB" / the parameters of the second tile.
 
-### Стартовая пачка GearLink (захват 18, минимальная конфигурация)
+### The GearLink startup batch (capture 18, the minimal configuration)
 
 ```
-12 01 / 12 00 / 12 14 / 24 01 …   опросы состояния
-65 00 00 00 FF                    wake: mode = 0xFF (НЕ 0! 0 = вид «Mail»/уведомлений)
-27 00                             пинг
-66 00 01 00 …                     пуш метрик (usage+temp)
-64 00 00 00 63 00                 пуш батареи (дубль через 0.5 c)
-63 00 00 00 00 EA 07 0A 04 01 1A  пуш времени
-23 02 / 24 00..03 / 23 03 04      чтение состояния экрана
+12 01 / 12 00 / 12 14 / 24 01 …   state polls
+65 00 00 00 FF                    wake: mode = 0xFF (NOT 0! 0 = the "Mail"/notification view)
+27 00                             ping
+66 00 01 00 …                     a metrics push (usage+temp)
+64 00 00 00 63 00                 a battery push (doubled 0.5 s later)
+63 00 00 00 00 EA 07 0A 04 01 1A  a time push
+23 02 / 24 00..03 / 23 03 04      screen state reads
 ```
 
-- Команды `6A` (маска) + `68` (яркость) + `50 55` (commit) GearLink шлёт ТОЛЬКО
-  при изменении набора виджетов, не при обычных пушах значений.
-- Флаг vendor-сессии `74` GearLink не шлёт вовсе.
-- Маска при конфигурации «часы+батарея+CPU» = `[0,1,1,1,0]`.
-- **GearLink не даёт выключить последний виджет** (минимум 1 активен); нулевая
-  маска, по наблюдению пользователя, вешает OLED — прототип виджеты не выключает
-  никогда, при расширении держать это ограничение в голове.
-- Часы на экране тикают сами; `0x63` — только синхронизация (старт + раз в 10 мин).
+- GearLink sends the `6A` (mask) + `68` (brightness) + `50 55` (commit)
+  commands ONLY when the widget set changes, not on regular value pushes.
+- GearLink never sends the vendor-session flag `74`.
+- The mask for the "clock+battery+CPU" configuration = `[0,1,1,1,0]`.
+- **GearLink does not let you turn off the last widget** (at least 1 stays
+  active); a zero mask, per the user's observation, hangs the OLED — the
+  prototype never turns widgets off; keep this limitation in mind when
+  extending.
+- The on-screen clock ticks by itself; `0x63` is only a sync (startup +
+  every 10 min).
 
-### Ловушки, найденные живым тестом 2026-10-04
+### Pitfalls found by the live test of 2026-10-04
 
-1. **Windows-hidapi требует `0x00` (report-ID) в начале записи** — без него пакет
-   «съезжает» на байт и устройство отвечает NAK `FF AA 00 00`. В клиенте:
-   `WRITE_PREFIX` (win32 only). Чтения приходят без префикса.
-2. **`read(timeout_ms=0)` на Windows = бесконечное блокирование** — «неблокирующий»
-   дренаж надо делать с `timeout_ms=1`.
-3. **`65` с mode=0** открывает вид уведомлений (тайл «Mail») — только `65 FF`.
-4. Экран может остаться на другой странице (было `page=5`): виджеты живут на
-   `page=1`; лечится `61 00 01` (клиент `set_page(1)`), но в норме страница не трогается.
-5. Свайпы тачскрина «глотаются», пока активен флаг wake (`65` с v≤2 взводит
-   `[0x2301D249]`, `65 FF` снимает — по коду; окно «глухих» свайпов после wake
-   даёт хвост диспетчера)
-   — то же поведение было и с живым GearLink.
+1. **Windows-hidapi requires `0x00` (the report ID) at the start of a
+   write** — without it the packet "shifts" by a byte and the device answers
+   NAK `FF AA 00 00`. In the client: `WRITE_PREFIX` (win32 only). Reads
+   arrive without a prefix.
+2. **`read(timeout_ms=0)` on Windows = infinite blocking** — the
+   "non-blocking" drain must be done with `timeout_ms=1`.
+3. **`65` with mode=0** opens the notification view (the "Mail" tile) — use
+   only `65 FF`.
+4. The screen may be left on another page (it was `page=5`): the widgets
+   live on `page=1`; the fix is `61 00 01` (the client `set_page(1)`), but
+   normally the page is not touched.
+5. Touchscreen swipes get "swallowed" while the wake flag is active (`65`
+   with v≤2 arms `[0x2301D249]`, `65 FF` clears it — per the code; the
+   window of "deaf" swipes after the wake comes from the dispatcher tail)
+   — the same behavior occurred with live GearLink too.
 
-## Запуск
+## Running
 
 ```
 pip install hidapi psutil
 python azoth-companion.py --status                # read-only
-python azoth-companion.py --once --cpu 42 --temp 55 --bat 77   # разовая проверка
-python azoth-companion.py --demo --bat 42         # тест сенсоров: 0→100→0 (~5.5 с в сторону)
-python azoth-companion.py --events                # рабочий цикл (+лог событий iface2)
-python azoth-companion.py                         # рабочий цикл: метрики --metrics (cpu-temp)
+python azoth-companion.py --once --cpu 42 --temp 55 --bat 77   # a one-shot check
+python azoth-companion.py --demo --bat 42         # a sensor test: 0→100→0 (~5.5 s each way)
+python azoth-companion.py --events                # the working loop (+ the iface2 event log)
+python azoth-companion.py                         # the working loop: --metrics (cpu-temp)
 ```
 
-Режимы `--metrics` (двойной тайл слота 3, без слайдшоу): `cpu-temp` (по
-умолчанию; без сенсора — только usage), `cpu-ram` (второй тайл «DRAM0 Usage»),
-`cpu`. Температура: нужен запущенный LibreHardwareMonitor + `pip install wmi`
-(ACPI-термозон на тестовой машине нет).
+The `--metrics` modes (the double tile of slot 3, no slideshow): `cpu-temp`
+(the default; without a sensor — usage only), `cpu-ram` (the second tile
+"DRAM0 Usage"), `cpu`. Temperature: needs a running LibreHardwareMonitor +
+`pip install wmi` (there is no ACPI thermal zone on the test machine).
 
-### Слайдшоу и слайды (v0.3)
+### Slideshow and slides (v0.3)
 
 ```
-python azoth-companion.py --slideshow 3           # слайдшоу каждые 3 с, набор по умолчанию
+python azoth-companion.py --slideshow 3           # a slideshow every 3 s, the default set
 python azoth-companion.py --slides cpu.usage,cpu.freq,ram.usage --slideshow 5
-python azoth-companion.py --slides cpu.usage,ram.usage   # --slides без --slideshow → период 2 с
+python azoth-companion.py --slides cpu.usage,ram.usage   # --slides without --slideshow → a 2 s period
 ```
 
-Слайд = одиночный пуш `0x66` (echo=0, GearLink-механика §10.6): автолистание
-таймером, свайп вниз (`03 96`) листает вручную и ставит автолистание на паузу
-5 с (`SWIPE_PAUSE_S`); свайп вверх прошивкой не сообщается. Имена слайдов —
-в формате «источник.метрика», повторяющем сетку конфига GearLink; она же —
-раскладка нибблов селектора 0x66 (PROTOCOL_OLED.md §10.5: hi = заголовок
-{0=CPU, 1=GPU, 2=VRM, 3=DRAM, 4=CHA}, lo = подпись {0=Usage, 1=Temp.,
-2=Freq., 5=Volt}):
+A slide = a single `0x66` push (echo=0, the GearLink mechanics §10.6):
+auto-paging by timer; a swipe down (`03 96`) pages manually and puts the
+auto-paging on a 5 s pause (`SWIPE_PAUSE_S`); a swipe up is not reported by
+the firmware. The slide names use the "source.metric" format that repeats
+the GearLink config grid; it is also the nibble layout of the 0x66 selector
+(PROTOCOL_OLED.md §10.5: hi = the header {0=CPU, 1=GPU, 2=VRM, 3=DRAM,
+4=CHA}, lo = the label {0=Usage, 1=Temp., 2=Freq., 5=Volt}):
 
-| Имя | Селектор | Источник данных | Подпись на OLED |
+| Name | Selector | Data source | OLED label |
 |---|---|---|---|
 | `cpu.usage` | 0x00 | psutil cpu_percent, % | CPU0 Usage |
-| `cpu.temp` | 0x01 | LHM Temperature «CPU Package», °C | CPU0 Temp |
-| `cpu.freq` | 0x02 | psutil cpu_freq().current, МГц | CPU0 Freq |
-| `cpu.volt` | 0x05 | LHM Voltage «Vcore», **мВ** | CPU0 Volt |
-| `gpu.usage` | 0x10 | LHM Load «GPU Core», % | GPU0 Usage |
-| `gpu.temp` | 0x11 | LHM Temperature GPU («Core»/«Hot Spot»), °C | GPU0 Temp |
-| `gpu.freq` | 0x12 | LHM Clock «GPU Core», МГц | GPU0 Freq |
-| `gpu.volt` | 0x15 | LHM Voltage GPU, мВ | GPU0 Volt |
+| `cpu.temp` | 0x01 | LHM Temperature "CPU Package", °C | CPU0 Temp |
+| `cpu.freq` | 0x02 | psutil cpu_freq().current, MHz | CPU0 Freq |
+| `cpu.volt` | 0x05 | LHM Voltage "Vcore", **mV** | CPU0 Volt |
+| `gpu.usage` | 0x10 | LHM Load "GPU Core", % | GPU0 Usage |
+| `gpu.temp` | 0x11 | LHM Temperature GPU ("Core"/"Hot Spot"), °C | GPU0 Temp |
+| `gpu.freq` | 0x12 | LHM Clock "GPU Core", MHz | GPU0 Freq |
+| `gpu.volt` | 0x15 | LHM Voltage GPU, mV | GPU0 Volt |
 | `ram.usage` | 0x30 | psutil virtual_memory, % | DRAM0 Usage |
 | `ram.temp` | 0x31 | LHM Temperature (SODIMM/DIMM), °C | DRAM0 Temp |
-| `ram.freq` | 0x32 | LHM Clock «Memory Clock», МГц | DRAM0 Freq |
-| `ram.volt` | 0x35 | LHM Voltage (DIMM/DRAM), мВ | DRAM0 Volt |
+| `ram.freq` | 0x32 | LHM Clock "Memory Clock", MHz | DRAM0 Freq |
+| `ram.volt` | 0x35 | LHM Voltage (DIMM/DRAM), mV | DRAM0 Volt |
 
-- Единицы подтверждены захватом 12 (§10.5): Usage=%, Temp=°C, Freq=МГц,
-  **Volt=мВ** (sel 05, val 525–981 = Vcore ноутбука).
-- VRM (hi=2) и CHA (hi=4) прошивка поддерживает, но в сетке конфига GearLink
-  их нет — не выставляем.
-- По умолчанию `cpu.usage,ram.usage,cpu.freq` (набор v0.2); дубликаты имён
-  схлопываются, пустой/неизвестный `--slides` — ошибка запуска с перечнем
-  допустимых источников/метрик. Короткие имена первой редакции v0.3
-  (`cpu`, `gpu`, `ram`, `usage`, `temp`, `freq`, `volt`) принимаются как
-  алиасы (`cpu` = `cpu.usage` и т.п.).
-- Сенсорные слайды (все temp/freq/volt и gpu.usage — всё, что не psutil) без
-  LHM: слайд **пропускается** с одним предупреждением (автолистание двигается
-  дальше); `cpu.usage`/`ram.usage` без psutil — останов. Ручные
-  `--cpu/--temp/--ram-val` приоритетны соответственно в cpu.usage/cpu.temp/
-  ram.usage.
-- LHM-провайдеры ищут датчики по имени (приоритетный список на каждый слайд,
-  см. `HostSensors._lhm_pick`); GPU/RAM-датчики платформозависимы — если LHM
-  их не экспортирует, слайд молча уйдёт в пропуск после одного предупреждения.
+- The units were confirmed by capture 12 (§10.5): Usage=%, Temp=°C, Freq=MHz,
+  **Volt=mV** (sel 05, val 525–981 = the laptop's Vcore).
+- VRM (hi=2) and CHA (hi=4) are supported by the firmware but absent from the
+  GearLink config grid — we don't set them.
+- The default is `cpu.usage,ram.usage,cpu.freq` (the v0.2 set); duplicate
+  names collapse; an empty/unknown `--slides` is a startup error listing the
+  allowed sources/metrics. The short first-draft v0.3 names
+  (`cpu`, `gpu`, `ram`, `usage`, `temp`, `freq`, `volt`) are accepted as
+  aliases (`cpu` = `cpu.usage`, etc.).
+- Sensor slides (all temp/freq/volt and gpu.usage — everything that is not
+  psutil) without LHM: the slide is **skipped** with a single warning (the
+  auto-paging moves on); `cpu.usage`/`ram.usage` without psutil — a stop.
+  The manual `--cpu/--temp/--ram-val` take priority in cpu.usage/cpu.temp/
+  ram.usage respectively.
+- The LHM providers look up sensors by name (a per-slide priority list, see
+  `HostSensors._lhm_pick`); the GPU/RAM sensors are platform-dependent — if
+  LHM doesn't export them, the slide silently goes to skip after a single
+  warning.
 
-### Лог-файл (v0.3)
+### Log file (v0.3)
 
-`--log-file [PATH]` — дублировать в файл ТЕ ЖЕ строки, что в stdout (не
-перенаправление): UTF-8, ротация по размеру ~2 МБ, всего 3 файла
-(`azoth-companion.log`, `.1`, `.2`; стандартный `logging.handlers.RotatingFileHandler`).
-Без PATH — `logs/azoth-companion.log` рядом с `azoth-companion.py` (каталог создаётся);
-относительный PATH считается от CWD. Важно для pythonw: там `sys.stdout`
-отсутствует и `print()` молчит — лог живёт только в файле.
+`--log-file [PATH]` — mirror into a file THE SAME lines that go to stdout
+(not a redirection): UTF-8, size-based rotation ~2 MB, 3 files in total
+(`azoth-companion.log`, `.1`, `.2`; the standard
+`logging.handlers.RotatingFileHandler`). Without PATH —
+`logs/azoth-companion.log` next to `azoth-companion.py` (the directory is
+created); a relative PATH is resolved from the CWD. Important for pythonw:
+there `sys.stdout` is absent and `print()` stays silent — the log lives only
+in the file.
 
-### Автозапуск (v0.3)
+### Autostart (v0.3)
 
 ```
-python azoth-companion.py --install-autostart     # создать задачу «Azoth Companion»
-python azoth-companion.py --uninstall-autostart   # удалить
+python azoth-companion.py --install-autostart     # create the "Azoth Companion" task
+python azoth-companion.py --uninstall-autostart   # remove it
 ```
 
-- Задача планировщика текущего пользователя: запуск при логоне через
-  `pythonw.exe` (без консольного окна) с флагами `--slideshow 2 --log-file`;
-  демона в момент установки/удаления не запускается.
-- **Двухступенчатая установка** (живой тест 2026-10-05): команда
-  `schtasks /create /sc onlogon …` пробуется первой, но её триггер — «ЛЮБОЙ
-  вход», и без админ-прав она отклоняется («Отказано в доступе»). Тогда код
-  регистрирует XML-задачу (`schtasks /create /tn Azoth Companion /xml …`): LogonTrigger
-  только для текущего пользователя + `LogonType=InteractiveToken` +
-  `RunLevel=LeastPrivilege` — то, что GUI планировщика разрешает обычному
-  пользователю; права администратора НЕ нужны. `ExecutionTimeLimit=PT0S` —
-  без стандартного лимита 72 ч, демон живёт вечно; `MultipleInstancesPolicy=
-  IgnoreNew` — повторный логон не плодит экземпляры.
-- XML-описание задачи остаётся в `logs/azoth-companion-task.xml` (для контроля).
-- Проверено на живой машине без ребута: `schtasks /run /tn Azoth Companion` поднимает
-  pythonw-демона, лог пишется; идемпотентная переустановка (`/f`) и удаление
-  работают; повторный `--uninstall-autostart` без задачи — не ошибка.
+- A current-user scheduler task: starts at logon via `pythonw.exe` (no
+  console window) with the flags `--slideshow 2 --log-file`; the daemon is
+  not started at install/uninstall time.
+- **A two-stage install** (live test 2026-10-05): the
+  `schtasks /create /sc onlogon …` command is tried first, but its trigger
+  is "ANY logon", and without admin rights it gets rejected ("Access is
+  denied"). The code then registers an XML task
+  (`schtasks /create /tn Azoth Companion /xml …`): a LogonTrigger for the
+  current user only + `LogonType=InteractiveToken` +
+  `RunLevel=LeastPrivilege` — exactly what the scheduler GUI allows a
+  regular user to create; administrator rights are NOT required.
+  `ExecutionTimeLimit=PT0S` — no standard 72 h limit, the daemon lives
+  forever; `MultipleInstancesPolicy=IgnoreNew` — a repeated logon doesn't
+  spawn extra instances.
+- The task's XML description is left in `logs/azoth-companion-task.xml`
+  (for inspection).
+- Verified on a live machine without a reboot:
+  `schtasks /run /tn Azoth Companion` brings up the pythonw daemon and the
+  log gets written; the idempotent reinstall (`/f`) and removal work; a
+  repeated `--uninstall-autostart` with no task present is not an error.
 
-## Статус живых тестов (2026-10-04, сессия 2)
+## Live test status (2026-10-04, session 2)
 
-- ✅ Транспорт (report-ID префикс), статус, маска, слот, время `0x63` — часы на
-  экране обновились при пушe.
-- ✅ Батарея `0x64` — подтверждена визуально (42% в демо).
-- ✅ `0x66` пушится и подтверждается; **«DRAM0 Usage» подтверждён на экране**
-  (бегущий треугольник, вторая пара двойного тайла).
-- ✅ Слайдшоу-механика (чередование селекторов одним пушем) работает — но пока
-  только на верхнем тайле двойного индикатора.
-- ❌ Слот 4 как «одиночный тайл» — не подтвердился (двойная раскладка + KPS).
-- ⏳ Истинно одинарные индикаторы — открытый вопрос (см. выше).
-- ⏳ Температура — ждёт LibreHardwareMonitor + `pip install wmi`.
+- ✅ Transport (the report-ID prefix), status, mask, slot, time `0x63` — the
+  on-screen clock updated upon a push.
+- ✅ Battery `0x64` — confirmed visually (42% in the demo).
+- ✅ `0x66` is pushed and acknowledged; **"DRAM0 Usage" confirmed on screen**
+  (a running triangle, the second pair of the double tile).
+- ✅ The slideshow mechanics (alternating selectors within one push) work —
+  but so far only on the top tile of the double indicator.
+- ❌ Slot 4 as a "single tile" — not confirmed (the double layout + KPS).
+- ⏳ Truly single indicators — an open question (see above).
+- ⏳ Temperature — waiting for LibreHardwareMonitor + `pip install wmi`.
 
-## Известные ограничения v0.2
+## Known limitations v0.2
 
-- Опрос хоста фиксированный (2 с / 0.4 с в demo / 1 с в slideshow, пуш при
-  изменении) — не строго event-driven, как GearLink.
-- Без LibreHardwareMonitor прототип пушит только Usage (второй тайл двойного
-  индикатора остаётся «CPU0 Usage 0» — виден пользователю).
-- Слайдшоу: после смены слайда первое значение может мигнуть от предыдущей
-  метрики (сдвиг пар «тип/значение» §10.3.2).
+- The host polling is fixed (2 s / 0.4 s in demo / 1 s in slideshow, a push
+  on change) — not strictly event-driven like GearLink.
+- Without LibreHardwareMonitor the prototype pushes only Usage (the second
+  tile of the double indicator stays at "CPU0 Usage 0" — visible to the
+  user).
+- Slideshow: right after a slide change the first value may flash from the
+  previous metric (the shift of the "type/value" pairs §10.3.2).
 
-## Живой тест v0.3 (2026-10-05, GearLink убит, `ZEPHYRUS`, Python 3.14)
+## Live test v0.3 (2026-10-05, GearLink killed, `ZEPHYRUS`, Python 3.14)
 
-- ✅ Слайды `cpu,ram,freq` листаются по таймеру: `DRAM0 Usage → CPU0 Freq →
-  CPU0 Usage` каждые 2 с, пуш `0x66` подтверждается; один NAK за 40 с погашен
-  тихой ретрией (robust_push без будильника), протокол не менялся.
-- ✅ Уточнение формата (2026-10-05, вторая итерация): `--slides` переведён на
-  сетку GearLink «источник.метрика» (`cpu.usage,ram.usage,cpu.freq` — селекторы
-  0x00/0x30/0x02 подтверждены в логе; `gpu.usage` → 0x10); короткие имена
-  первой редакции работают как алиасы; `gpu.usage` без сенсора пропускается
-  с одним предупреждением, слайдшоу едет по живым слайдам; `--once` после
-  рефакторинга `HostSensors` (общий `_lhm_pick` + провайдеры gpu.*/ram.*)
-  работает как раньше.
-- ✅ `--slides cpu,temp,volt,freq` без wmi/LHM: оба сенсорных слайда
-  пропущены с однократными предупреждениями (плюс штатные подсказки из
-  `HostSensors`), слайдшоу едет по живым слайдам `cpu → freq`.
-- ✅ Валидация: `--slides bogus` / `--slides ","` — ошибки запуска с
-  перечнем допустимых имён; `--slideshow 0` — чистая ошибка argparse.
-- ✅ `--log-file`: `logs/azoth-companion.log` создаётся, дублирует stdout-строки,
-  валидный UTF-8; ротация проверена на реальном `setup_log_file()` с
-  уменьшенным лимитом — ровно 3 файла (`.log`, `.1`, `.2`), без потерь.
-- ✅ Автозапуск: `schtasks /sc onlogon` без админа → «Отказано в доступе» →
-  XML-фолбэк создал задачу «Azoth Companion» (LogonTrigger `ZEPHYRUS\mmore`,
-  InteractiveToken, без лимита 72 ч); `schtasks /run /tn Azoth Companion` поднял
-  pythonw-демона БЕЗ консольного окна, лог писался, слайды пушились;
-  переустановка идемпотентна, `--uninstall-autostart` удаляет, повторное
-  удаление — мягкое «удалять нечего».
-- ✅ Регресс `--once` (старый `--metrics`-путь) — без изменений.
-- ⏳ Свайп вниз (ручное листание + пауза) и hold качельки (финальное значение
-  после отпускания) — требуют рук на устройстве; код этих трактов в v0.3 не
-  трогался (см. `0396`-обработчик и `VolumeWorker`). Команда для проверки:
+- ✅ The slides `cpu,ram,freq` page by timer: `DRAM0 Usage → CPU0 Freq →
+  CPU0 Usage` every 2 s, the `0x66` push is acknowledged; one NAK in 40 s was
+  absorbed by a quiet retry (robust_push without a wake-up), the protocol
+  unchanged.
+- ✅ A format refinement (2026-10-05, the second iteration): `--slides` moved
+  to the GearLink "source.metric" grid (`cpu.usage,ram.usage,cpu.freq` — the
+  selectors 0x00/0x30/0x02 confirmed in the log; `gpu.usage` → 0x10); the
+  short first-draft names work as aliases; `gpu.usage` without a sensor is
+  skipped with a single warning and the slideshow runs over the live slides;
+  `--once` after the `HostSensors` refactor (a shared `_lhm_pick` + the
+  gpu.*/ram.* providers) works as before.
+- ✅ `--slides cpu,temp,volt,freq` without wmi/LHM: both sensor slides were
+  skipped with one-time warnings (plus the regular hints from
+  `HostSensors`), the slideshow ran over the live slides `cpu → freq`.
+- ✅ Validation: `--slides bogus` / `--slides ","` — startup errors listing
+  the allowed names; `--slideshow 0` — a clean argparse error.
+- ✅ `--log-file`: `logs/azoth-companion.log` gets created, mirrors the
+  stdout lines, valid UTF-8; the rotation was verified on a real
+  `setup_log_file()` with a reduced limit — exactly 3 files
+  (`.log`, `.1`, `.2`), no losses.
+- ✅ Autostart: `schtasks /sc onlogon` without admin → "Access is denied" →
+  the XML fallback created the "Azoth Companion" task (LogonTrigger
+  `ZEPHYRUS\mmore`, InteractiveToken, no 72 h limit);
+  `schtasks /run /tn Azoth Companion` brought up the pythonw daemon WITHOUT
+  a console window, the log was written and the slides pushed; the reinstall
+  is idempotent, `--uninstall-autostart` removes the task, and a repeated
+  removal gives a soft "nothing to remove".
+- ✅ The `--once` regression (the old `--metrics` path) — unchanged.
+- ⏳ Swipe down (manual paging + the pause) and the rocker hold (the final
+  value after the release) — these need hands on the device; the code of
+  these paths was not touched in v0.3 (see the `0396` handler and
+  `VolumeWorker`). The verification command:
   `python azoth-companion.py --slideshow 2 --log-file`.
-- ⏳ Подписи/единицы тайлов gpu.*/ram.* на экране и сами LHM-датчики GPU/RAM —
-  сверить на машине с запущенным LibreHardwareMonitor (у cpu.volt единицы
-  мВ подтверждены захватом 12).
-
+- ⏳ The labels/units of the gpu.*/ram.* tiles on screen and the LHM GPU/RAM
+  sensors themselves — to be checked on a machine with a running
+  LibreHardwareMonitor (the cpu.volt units of mV were confirmed by
+  capture 12).
