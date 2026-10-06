@@ -1,9 +1,33 @@
 # Azoth Companion v0.3 — a GearLink replacement prototype
 
-**File:** `azoth-companion.py` (transport — `analysis/m901_client.py`).
-**Updated:** 2026-10-05 (v0.3: `--slides`, `--log-file`, autostart; the protocol
-logic is unchanged). Previous findings — 2026-10-04, GearLink captures
+**Entry:** `main.py` — the `azoth/` package (since the 2026-10-06 restructure;
+before that — the `azoth-companion.py` monolith). The transport lives in
+`azoth/devices/m901.py`.
+**Updated:** 2026-10-06 (the restructure into packages; the protocol logic is
+unchanged). Previous findings — 2026-10-05 (v0.3: `--monitor-items`,
+`--log-file`, autostart) and 2026-10-04, GearLink captures
 (`C:/azoth-capture/16-gearlink-startup.pcap`, `18-gearlink-minimal.pcap`).
+
+The layout:
+
+```
+main.py               — the entry point (the connect/reconnect cycle)
+azoth/
+  cli.py              — argparse → Config; the --once/--status modes
+  loop.py             — the scheduler: the single 0xFFC0 queue owner
+  constants.py        — the slots, the slides, the timings
+  log.py              — the stdout log + the file mirror
+  devices/m901.py     — the HID transport + the vendor protocol
+  sources/            — the value providers: router.py (the "key → provider"
+                        registry) + common/ (psutil, manual, demo),
+                        windows/ (LHM, volume), darwin/ (macmon, volume),
+                        linux/ (hwmon)
+  widgets/            — the slot widgets: base.py (the contract), banner.py,
+                        clock.py, battery.py, monitor.py, kps.py
+  overlays/volume.py  — the volume OSD (the rocker)
+scripts/install.py    — the autostart (schtasks): install|uninstall
+tests/                — the assert-based unit checks (python tests/test_*.py)
+```
 
 ## The protocol model (verified against a live session + captures)
 
@@ -379,11 +403,11 @@ final plate always equals the OS volume.
 
 ```
 pip install hidapi psutil
-python azoth-companion.py --status                # read-only
-python azoth-companion.py --once --cpu 42 --temp 55 --bat 77   # a one-shot check
-python azoth-companion.py --demo --bat 42         # a sensor test: 0→100→0 (~5.5 s each way)
-python azoth-companion.py --events                # the working loop (+ the iface2 event log)
-python azoth-companion.py                         # the working loop: --metrics (cpu-temp)
+python main.py --status                # read-only
+python main.py --once --cpu 42 --temp 55 --bat 77   # a one-shot check
+python main.py --demo --bat 42         # a sensor test: 0→100→0 (~5.5 s each way)
+python main.py --events                # the working loop (+ the iface2 event log)
+python main.py                         # the working loop: --metrics (cpu-temp)
 ```
 
 The `--metrics` modes (the double tile of slot 3, no slideshow): `cpu-temp`
@@ -394,9 +418,9 @@ The `--metrics` modes (the double tile of slot 3, no slideshow): `cpu-temp`
 ### Slideshow and slides (v0.3)
 
 ```
-python azoth-companion.py --slideshow 3           # a slideshow every 3 s, the default set
-python azoth-companion.py --slides cpu.usage,cpu.freq,ram.usage --slideshow 5
-python azoth-companion.py --slides cpu.usage,ram.usage   # --slides without --slideshow → a 2 s period
+python main.py --slideshow 3           # a slideshow every 3 s, the default set
+python main.py --monitor-items cpu.usage,cpu.freq,ram.usage --slideshow 5
+python main.py --monitor-items cpu.usage,ram.usage   # without --slideshow → a 2 s period
 ```
 
 A slide = a single `0x66` push (echo=0, the GearLink mechanics §10.6):
@@ -427,7 +451,7 @@ the GearLink config grid; it is also the nibble layout of the 0x66 selector
 - VRM (hi=2) and CHA (hi=4) are supported by the firmware but absent from the
   GearLink config grid — we don't set them.
 - The default is `cpu.usage,ram.usage,cpu.freq` (the v0.2 set); duplicate
-  names collapse; an empty/unknown `--slides` is a startup error listing the
+  names collapse; an empty/unknown `--monitor-items` is a startup error listing the
   allowed sources/metrics. The short first-draft v0.3 names
   (`cpu`, `gpu`, `ram`, `usage`, `temp`, `freq`, `volt`) are accepted as
   aliases (`cpu` = `cpu.usage`, etc.).
@@ -437,7 +461,7 @@ the GearLink config grid; it is also the nibble layout of the 0x66 selector
   The manual `--cpu/--temp/--ram-val` take priority in cpu.usage/cpu.temp/
   ram.usage respectively.
 - The LHM providers look up sensors by name (a per-slide priority list, see
-  `HostSensors._lhm_pick`); the GPU/RAM sensors are platform-dependent — if
+  `azoth/sources/windows/lhm.py`); the GPU/RAM sensors are platform-dependent — if
   LHM doesn't export them, the slide silently goes to skip after a single
   warning.
 - **Double tiles — `a+b` pairs**: `--monitor-items
@@ -462,7 +486,7 @@ the GearLink config grid; it is also the nibble layout of the 0x66 selector
 (not a redirection): UTF-8, size-based rotation ~2 MB, 3 files in total
 (`azoth-companion.log`, `.1`, `.2`; the standard
 `logging.handlers.RotatingFileHandler`). Without PATH —
-`logs/azoth-companion.log` next to `azoth-companion.py` (the directory is
+`logs/azoth-companion.log` next to `main.py` (the directory is
 created); a relative PATH is resolved from the CWD. Important for pythonw:
 there `sys.stdout` is absent and `print()` stays silent — the log lives only
 in the file.
@@ -470,13 +494,13 @@ in the file.
 ### Autostart (v0.3)
 
 ```
-python azoth-companion.py --install-autostart     # create the "Azoth Companion" task
-python azoth-companion.py --uninstall-autostart   # remove it
+python scripts/install.py install      # create the "Azoth Companion" task
+python scripts/install.py uninstall    # remove it
 ```
 
 - A current-user scheduler task: starts at logon via `pythonw.exe` (no
-  console window) with the flags `--slideshow 2 --log-file`; the daemon is
-  not started at install/uninstall time.
+  console window) with the flags `--clock --battery --monitor --slideshow 2
+  --log-file`; the daemon is not started at install/uninstall time.
 - **A two-stage install** (live test 2026-10-05): the
   `schtasks /create /sc onlogon …` command is tried first, but its trigger
   is "ANY logon", and without admin rights it gets rejected ("Access is
@@ -493,7 +517,7 @@ python azoth-companion.py --uninstall-autostart   # remove it
 - Verified on a live machine without a reboot:
   `schtasks /run /tn Azoth Companion` brings up the pythonw daemon and the
   log gets written; the idempotent reinstall (`/f`) and removal work; a
-  repeated `--uninstall-autostart` with no task present is not an error.
+  repeated `uninstall` with no task present is not an error.
 
 ## Live test status (2026-10-04, session 2)
 
@@ -550,9 +574,9 @@ python azoth-companion.py --uninstall-autostart   # remove it
 - ✅ The `--once` regression (the old `--metrics` path) — unchanged.
 - ⏳ Swipe down (manual paging + the pause) and the rocker hold (the final
   value after the release) — these need hands on the device; the code of
-  these paths was not touched in v0.3 (see the `0396` handler and
-  `VolumeWorker`). The verification command:
-  `python azoth-companion.py --slideshow 2 --log-file`.
+  these paths was not touched in v0.3 (see the `0396` routing in
+  `azoth/loop.py` and `VolumeWorker`). The verification command:
+  `python main.py --slideshow 2 --log-file`.
 - ⏳ The labels/units of the gpu.*/ram.* tiles on screen and the LHM GPU/RAM
   sensors themselves — to be checked on a machine with a running
   LibreHardwareMonitor (the cpu.volt units of mV were confirmed by

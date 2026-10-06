@@ -5,7 +5,7 @@ M901 (ASUS ROG Azoth 96 HE) - Python client of the vendor protocol.
 Transport: HID, usage page 0xFF00 (USB) or 0xFF01, 64-byte reports without a report ID.
 Dependency: pip install hidapi  (import hid)
 
-For the command status see analysis/PROTOCOL.md.
+For the command status see PROTOCOL.md.
 """
 from __future__ import annotations
 import struct
@@ -170,7 +170,7 @@ class M901:
         r = self.transact(0x12, 0x06, b"")
         return r[4] if r and len(r) >= 5 else None
 
-    # ---------- display/widgets (see analysis/PROTOCOL_STATUSBAR.md, PROTOCOL_OLED.md) ----------
+    # ---------- display/widgets (see PROTOCOL_STATUSBAR.md, PROTOCOL_OLED.md) ----------
     def set_widget(self, slot: int, on: bool, mode: int = 0x00) -> bool:
         """0x6A sub 0: enable/disable a slot widget (the slot bit of the 0x23008BCE mask).
 
@@ -591,7 +591,7 @@ class M901:
         """Sends the magic and waits for re-enumeration (the device will disconnect)."""
         self.unlock()
 
-    # ---------- volume / OSD (see analysis/PROTOCOL_VOLUME.md) ----------
+    # ---------- volume / OSD (see PROTOCOL_VOLUME.md) ----------
     def send_volume_osd(self, volume: int, store: bool = False) -> bool:
         """0x51 sub 0x0C: draw the volume OSD on the OLED for the rocker.
 
